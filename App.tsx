@@ -62,6 +62,7 @@ const App: React.FC = () => {
   
   // UI State
   const [showDownloadMenu, setShowDownloadMenu] = useState(false);
+  const [includeTimecodes, setIncludeTimecodes] = useState(true); // Option to include timestamps in download
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [savedSessions, setSavedSessions] = useState<StoredSession[]>([]);
   const [saveStatus, setSaveStatus] = useState<SaveStatus>('idle');
@@ -313,6 +314,36 @@ const App: React.FC = () => {
     addToHistory(newSegments, editMode);
   };
 
+  const handleSplitSegment = (id: string, cursorPosition: number) => {
+    const index = segments.findIndex(s => s.id === id);
+    if (index === -1) return;
+
+    const originalSegment = segments[index];
+    const textBefore = originalSegment.text.substring(0, cursorPosition).trim();
+    const textAfter = originalSegment.text.substring(cursorPosition).trim();
+
+    // Allow split even if textAfter is empty (user wants new paragraph at end)
+    
+    const newSegments = [...segments];
+    
+    // Update current segment
+    newSegments[index] = {
+      ...originalSegment,
+      text: textBefore
+    };
+
+    // Insert new segment
+    newSegments.splice(index + 1, 0, {
+      id: `seg-split-${Date.now()}`,
+      speaker: "?", // Placeholder
+      startTime: originalSegment.startTime, // Keep approximate time
+      text: textAfter
+    });
+
+    setSegments(newSegments);
+    addToHistory(newSegments, editMode);
+  };
+
   const handleSegmentBlur = () => {
     const currentHistoryItem = history[historyIndex];
     if (currentHistoryItem && JSON.stringify(segments) !== JSON.stringify(currentHistoryItem.segments)) {
@@ -357,9 +388,15 @@ const App: React.FC = () => {
       content = JSON.stringify(segments, null, 2);
       type = 'application/json';
     } else if (format === 'txt') {
-      content = segments.map(s => `[${s.startTime}] ${s.speaker}: ${s.text}`).join('\n\n');
+      content = segments.map(s => {
+        const timeStr = includeTimecodes ? `[${s.startTime}] ` : '';
+        return `${timeStr}${s.speaker}: ${s.text}`;
+      }).join('\n\n');
     } else if (format === 'md') {
-      content = segments.map(s => `**${s.speaker}** (${s.startTime})\n\n${s.text}`).join('\n\n');
+      content = segments.map(s => {
+        const timeStr = includeTimecodes ? `(${s.startTime})` : '';
+        return `**${s.speaker}** ${timeStr}\n\n${s.text}`;
+      }).join('\n\n');
     }
 
     const blob = new Blob([content], { type });
@@ -440,7 +477,6 @@ const App: React.FC = () => {
         onCancel={() => setDialog(prev => ({ ...prev, isOpen: false }))} 
       />
 
-      {/* Render Landing if needed, passing the dialog context conceptually (actually handled by return logic) */}
       {(!file && !sessionId && processingState.status === 'idle') ? renderLanding() : (
         <>
           {isSidebarOpen && (
@@ -497,8 +533,17 @@ const App: React.FC = () => {
                   {showDownloadMenu && (
                     <>
                       <div className="fixed inset-0 z-40" onClick={() => setShowDownloadMenu(false)} />
-                      <div className="absolute right-0 mt-2 w-40 bg-white rounded-md shadow-lg ring-1 ring-black ring-opacity-5 z-50 py-1">
+                      <div className="absolute right-0 mt-2 w-48 bg-white rounded-md shadow-lg ring-1 ring-black ring-opacity-5 z-50 py-1">
                         <div className="px-4 py-2 text-xs text-gray-400 uppercase font-bold tracking-wider border-b border-gray-100">Exportar como</div>
+                        <label className="flex items-center px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 cursor-pointer border-b border-gray-100">
+                          <input 
+                            type="checkbox" 
+                            checked={includeTimecodes} 
+                            onChange={(e) => setIncludeTimecodes(e.target.checked)}
+                            className="mr-2 rounded text-indigo-600 focus:ring-indigo-500"
+                          />
+                          Incluir Timecodes
+                        </label>
                         <button onClick={() => handleDownload('txt')} className="block w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-50">Texto plano (.txt)</button>
                         <button onClick={() => handleDownload('md')} className="block w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-50">Markdown (.md)</button>
                         <button onClick={() => handleDownload('json')} className="block w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-50">JSON (.json)</button>
@@ -538,7 +583,17 @@ const App: React.FC = () => {
               </div>
             ) : (
               <div className={`transition-opacity duration-500 ${processingState.status === 'refining' ? 'opacity-50 pointer-events-none grayscale-[0.3]' : 'opacity-100'}`}>
-                <Editor segments={segments} onSegmentChange={handleSegmentChange} onSpeakerChange={handleSpeakerChange} onSegmentClick={handleSegmentClick} onSegmentBlur={handleSegmentBlur} onDeleteSegment={handleDeleteSegment} onMergeSegment={handleMergeSegment} currentAudioTime={currentTime} />
+                <Editor 
+                  segments={segments} 
+                  onSegmentChange={handleSegmentChange} 
+                  onSpeakerChange={handleSpeakerChange} 
+                  onSegmentClick={handleSegmentClick} 
+                  onSegmentBlur={handleSegmentBlur} 
+                  onDeleteSegment={handleDeleteSegment} 
+                  onMergeSegment={handleMergeSegment}
+                  onSplitSegment={handleSplitSegment}
+                  currentAudioTime={currentTime} 
+                />
               </div>
             )}
           </main>

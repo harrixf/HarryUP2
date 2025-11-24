@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useMemo } from 'react';
 import { TranscriptSegment } from '../types';
 import { TrashIcon, MergeUpIcon } from './Icons';
 
@@ -10,6 +10,7 @@ interface EditorProps {
   onSegmentBlur: () => void;
   onDeleteSegment: (id: string) => void;
   onMergeSegment: (id: string) => void;
+  onSplitSegment: (id: string, cursorPosition: number) => void;
   currentAudioTime: number;
 }
 
@@ -48,9 +49,16 @@ export const Editor: React.FC<EditorProps> = ({
   onSegmentBlur,
   onDeleteSegment,
   onMergeSegment,
+  onSplitSegment,
   currentAudioTime 
 }) => {
   const [activeSegmentIndex, setActiveSegmentIndex] = useState<number>(-1);
+
+  // Extract unique speakers for the dropdown/datalist
+  const uniqueSpeakers = useMemo(() => {
+    const speakers = new Set(segments.map(s => s.speaker));
+    return Array.from(speakers).filter(Boolean);
+  }, [segments]);
 
   // Detect active segment based on time
   useEffect(() => {
@@ -96,10 +104,25 @@ export const Editor: React.FC<EditorProps> = ({
         }
       }
     }
+
+    // Split on Enter
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      const target = e.currentTarget;
+      const cursorPosition = target.selectionStart;
+      onSplitSegment(id, cursorPosition);
+    }
   };
 
   return (
     <div className="max-w-3xl mx-auto pb-40 pt-8 px-4 sm:px-6">
+      {/* Global Datalist for Speakers */}
+      <datalist id="known-speakers">
+        {uniqueSpeakers.map((speaker) => (
+          <option key={speaker} value={speaker} />
+        ))}
+      </datalist>
+
       <div className="space-y-6">
         {segments.map((segment, index) => {
           const isActive = index === activeSegmentIndex;
@@ -109,17 +132,20 @@ export const Editor: React.FC<EditorProps> = ({
             <div 
               key={segment.id} 
               id={`segment-${index}`}
-              className={`group relative p-4 rounded-lg transition-all duration-300 border-l-4 ${isActive ? 'bg-indigo-50 border-indigo-500 shadow-sm' : 'bg-white border-transparent hover:bg-gray-50'}`}
+              className={`group relative p-4 rounded-lg transition-all duration-300 border-l-4 scroll-mt-32 scroll-mb-32 ${isActive ? 'bg-indigo-50 border-indigo-500 shadow-sm' : 'bg-white border-transparent hover:bg-gray-50'}`}
             >
               <div className="flex items-center justify-between mb-2 gap-4 relative">
-                <input
-                  type="text"
-                  value={segment.speaker}
-                  onChange={(e) => onSpeakerChange(segment.id, e.target.value)}
-                  onBlur={onSegmentBlur}
-                  className={`text-xs font-bold tracking-wider uppercase bg-transparent border-none p-0 focus:ring-0 cursor-pointer hover:opacity-80 w-full transition-colors ${speakerColor}`}
-                  placeholder="Nombre del hablante"
-                />
+                <div className="relative w-full">
+                  <input
+                    type="text"
+                    list="known-speakers"
+                    value={segment.speaker}
+                    onChange={(e) => onSpeakerChange(segment.id, e.target.value)}
+                    onBlur={onSegmentBlur}
+                    className={`text-xs font-bold tracking-wider uppercase bg-transparent border-none p-0 focus:ring-0 cursor-pointer hover:opacity-80 w-full transition-colors ${speakerColor}`}
+                    placeholder="Nombre del hablante"
+                  />
+                </div>
                 
                 <div className="flex items-center gap-2">
                   {/* Action Buttons - Visible on Hover or Active */}
