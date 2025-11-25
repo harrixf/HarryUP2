@@ -7,7 +7,6 @@ import { TranscriptSegment, EditMode, Language } from "../types";
 const getApiKey = (): string | undefined => {
   let key: string | undefined = undefined;
 
-  // 1. Try Vite / Modern Browsers (import.meta.env)
   try {
     // @ts-ignore
     if (import.meta && import.meta.env) {
@@ -16,7 +15,6 @@ const getApiKey = (): string | undefined => {
     }
   } catch (e) {}
 
-  // 2. Try Process Env (Next.js, CRA, Google AI Studio Injection, Node)
   if (!key && typeof process !== 'undefined' && process.env) {
     key = process.env.NEXT_PUBLIC_GEMINI_API_KEY || 
           process.env.REACT_APP_GEMINI_API_KEY || 
@@ -37,7 +35,6 @@ const fileToGenerativePart = async (file: File): Promise<{ inlineData: { data: s
           reject(new Error("Failed to read file"));
           return;
       }
-      // Remove data URL prefix if present
       const base64String = result.includes(',') ? result.split(',')[1] : result;
       resolve({
         inlineData: {
@@ -76,12 +73,11 @@ async function generateWithRetry(
     try {
       return await modelInstance.generateContent(params);
     } catch (error: any) {
-      // Check for 429 (Quota Exceeded/Rate Limit) or 503 (Service Unavailable)
       const isRateLimit = error.message?.includes('429') || error.status === 429 || error.code === 429;
       const isOverloaded = error.message?.includes('503') || error.status === 503;
 
       if ((isRateLimit || isOverloaded) && i < retries - 1) {
-        const waitTime = 3000 * Math.pow(2, i); // Exponential backoff: 3s, 6s, 12s
+        const waitTime = 3000 * Math.pow(2, i);
         console.warn(`API limit hit (429/503). Retrying in ${waitTime}ms... (Attempt ${i + 1}/${retries})`);
         await delay(waitTime);
         continue;
@@ -91,17 +87,7 @@ async function generateWithRetry(
   }
 }
 
-// --- SAFETY SETTINGS ---
-// Crucial to prevent "Empty response" when the model falsely flags content
-const safetySettings = [
-  { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_ONLY_HIGH" },
-  { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_ONLY_HIGH" },
-  { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_ONLY_HIGH" },
-  { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_ONLY_HIGH" },
-];
-
 export const transcribeAudio = async (file: File, language: Language): Promise<TranscriptSegment[]> => {
-  // 1. Check File Size (Client-side safety)
   if (file.size > 25 * 1024 * 1024) {
     throw new Error(language === 'es' 
       ? "El archivo es demasiado grande para la versión web (>25MB). Por favor, compímelo o usa un clip más corto."
@@ -111,17 +97,16 @@ export const transcribeAudio = async (file: File, language: Language): Promise<T
 
   const apiKey = getApiKey();
   if (!apiKey) {
-    console.error("CRITICAL: API Key not found in any environment variable.");
-    throw new Error("API Key Missing. Please check your configuration.");
+    console.error("CRITICAL: API Key not found.");
+    throw new Error("API Key Missing. Check config.");
   }
 
   const ai = new GoogleGenAI({ apiKey });
 
   try {
-    console.log(`Starting transcription... File: ${file.name} (${(file.size / 1024 / 1024).toFixed(2)} MB)`);
+    console.log(`Starting transcription... File: ${file.name}`);
     const audioPart = await fileToGenerativePart(file);
     
-    // Use stable model
     const model = "gemini-2.5-flash";
     
     let prompt = "";
@@ -141,28 +126,23 @@ export const transcribeAudio = async (file: File, language: Language): Promise<T
         responseSchema: transcriptSchema,
         systemInstruction: language === 'es' 
           ? "Eres un transcriptor experto para periodistas. Tu objetivo es capturar el diálogo con precisión, identificando cambios de hablante."
-          : "Kazetarientzako transkribatzaile aditua zara. Zure helburua elkarrizketa zehaztasunez jasotzea da, hizlari aldaketak identifikatuz.",
-        safetySettings: safetySettings,
+          : "Kazetarientzako transkribatzaile aditua zara. Zure helburua elkarrizketa zehaztasunez jasotzea da, hizlari aldaketak identifikatuz."
       }
     });
 
     const jsonText = response.text;
-    if (!jsonText) throw new Error("Empty response from Gemini API. The model might have blocked the content.");
+    if (!jsonText) throw new Error("Empty response from Gemini API. Please try again.");
     
     const data = JSON.parse(jsonText);
-    
     return data.map((item: any, index: number) => ({
       ...item,
       id: `seg-${index}-${Date.now()}`
     }));
 
   } catch (error: any) {
-    console.error("Transcription Error Details:", error);
-    if (error.message?.includes("429") || error.status === 429) {
-      throw new Error("El sistema está saturado (Error 429). Hemos reintentado varias veces pero la cuota sigue excedida. Por favor, espera 1 minuto.");
-    }
-    if (error.message?.includes("400")) {
-      throw new Error("Error de formato (400). El audio podría no ser compatible o estar corrupto.");
+    console.error("Transcription Error:", error);
+    if (error.message?.includes("429")) {
+      throw new Error("El sistema está saturado (Error 429). Espera 1 minuto e inténtalo de nuevo.");
     }
     throw error;
   }
@@ -175,25 +155,23 @@ export const refineTranscript = async (
 ): Promise<TranscriptSegment[]> => {
   const apiKey = getApiKey();
   if (!apiKey) throw new Error("API Key not found.");
-
   if (mode === EditMode.RAW) return segments;
 
   const ai = new GoogleGenAI({ apiKey });
   const model = "gemini-2.5-flash"; 
   
   let prompt = "";
-  
   if (language === 'es') {
     if (mode === EditMode.CLEANED) {
-      prompt = "Elimina las muletillas, repeticiones innecesarias, titubeos ('eh', 'mmm') y falsos comienzos del siguiente texto. Mantén el significado exacto y el tono, pero hazlo más legible. Devuelve el mismo formato JSON.";
+      prompt = "Elimina muletillas y repeticiones. Mantén significado y tono. Devuelve el mismo JSON.";
     } else if (mode === EditMode.JOURNALISTIC) {
-      prompt = "Reescribe el texto con un estilo periodístico formal. Corrige la gramática, mejora la fluidez y utiliza un vocabulario más preciso y profesional, manteniendo la veracidad de las declaraciones. Devuelve el mismo formato JSON.";
+      prompt = "Reescribe con estilo periodístico formal. Corrige gramática, mejora fluidez. Mantén la veracidad. Devuelve el mismo JSON.";
     }
   } else {
     if (mode === EditMode.CLEANED) {
-      prompt = "Ezabatu betegarriak, alferrikako errepikapenak eta zalantza-hotsak ('em', 'ba') hurrengo testutik. Mantendu esanahia eta tonua, baina egin irakurgarriagoa. Itzuli JSON formatu bera.";
+      prompt = "Ezabatu betegarriak eta errepikapenak. Mantendu esanahia. Itzuli JSON bera.";
     } else if (mode === EditMode.JOURNALISTIC) {
-      prompt = "Berridatzi testua kazetaritza-estilo formalarekin. Zuzendu gramatika, hobetu jariotasuna eta erabili hiztegi zehatzagoa eta profesionalagoa, adierazpenen egiazkotasuna mantenduz. Itzuli JSON formatu bera.";
+      prompt = "Berridatzi kazetaritza-estilo formalean. Zuzendu gramatika. Itzuli JSON bera.";
     }
   }
 
@@ -208,7 +186,6 @@ export const refineTranscript = async (
       config: {
         responseMimeType: "application/json",
         responseSchema: transcriptSchema,
-        safetySettings: safetySettings,
       }
     });
 
@@ -216,7 +193,6 @@ export const refineTranscript = async (
     if (!jsonText) throw new Error("No response from Gemini");
 
     const data = JSON.parse(jsonText);
-     
      return data.map((item: any, index: number) => ({
         ...item,
         id: segments[index]?.id || `seg-refined-${index}-${Date.now()}`
@@ -230,38 +206,41 @@ export const refineTranscript = async (
 
 export const queryTranscript = async (
   segments: TranscriptSegment[],
-  query: string,
+  question: string,
   language: Language
 ): Promise<string> => {
   const apiKey = getApiKey();
   if (!apiKey) throw new Error("API Key not found.");
 
   const ai = new GoogleGenAI({ apiKey });
-  
-  // Format transcript for context
-  const context = segments
-    .map(s => `[${s.startTime}] ${s.speaker}: ${s.text}`)
-    .join('\n');
+  const model = "gemini-2.5-flash";
 
-  const prompt = `Contexto de la entrevista:\n${context}\n\nPregunta del usuario:\n${query}`;
-  
-  const systemInstruction = language === 'es' 
-    ? "Eres un asistente experto en analizar entrevistas. Responde a la pregunta basándote ÚNICAMENTE en la transcripción proporcionada. Si la respuesta no está en el texto, indícalo. Sé conciso."
-    : "Elkarrizketak aztertzen aditua den laguntzailea zara. Erantzun galderari emandako transkripzioan oinarrituta BAKARRIK. Erantzuna testuan ez badago, adierazi. Izan laburra.";
+  // Context preparation
+  const transcriptText = segments
+    .map(s => `[${s.startTime}] ${s.speaker}: ${s.text}`)
+    .join("\n");
+
+  const systemInstruction = language === 'es'
+    ? "Eres un asistente útil y preciso. Responde preguntas basándote únicamente en la transcripción proporcionada. Si no encuentras la respuesta en el texto, indícalo. Mantén un tono profesional."
+    : "Laguntzaile erabilgarria eta zehatza zara. Erantzun galderak emandako transkripzioan oinarrituta soilik. Testuan erantzuna aurkitzen ez baduzu, adierazi. Mantendu tonu profesionala.";
 
   try {
     const response = await generateWithRetry(ai.models, {
-      model: "gemini-2.5-flash",
-      contents: prompt,
+      model: model,
+      contents: {
+        parts: [
+            { text: `TRANSCRIPT:\n${transcriptText}` },
+            { text: `QUESTION: ${question}` }
+        ]
+      },
       config: {
         systemInstruction: systemInstruction,
-        safetySettings: safetySettings,
       }
     });
 
-    return response.text || "";
+    return response.text || (language === 'es' ? "No pude generar una respuesta." : "Ezin izan dut erantzunik sortu.");
   } catch (error) {
-    console.error("Query failed", error);
+    console.error("Query Transcript Error:", error);
     throw error;
   }
 };
