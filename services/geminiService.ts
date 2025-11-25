@@ -1,3 +1,5 @@
+
+
 import { GoogleGenAI, Type, Schema } from "@google/genai";
 import { TranscriptSegment, EditMode, Language } from "../types";
 
@@ -89,6 +91,15 @@ async function generateWithRetry(
   }
 }
 
+// --- SAFETY SETTINGS ---
+// Crucial to prevent "Empty response" when the model falsely flags content
+const safetySettings = [
+  { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_ONLY_HIGH" },
+  { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_ONLY_HIGH" },
+  { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_ONLY_HIGH" },
+  { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_ONLY_HIGH" },
+];
+
 export const transcribeAudio = async (file: File, language: Language): Promise<TranscriptSegment[]> => {
   // 1. Check File Size (Client-side safety)
   if (file.size > 25 * 1024 * 1024) {
@@ -110,6 +121,7 @@ export const transcribeAudio = async (file: File, language: Language): Promise<T
     console.log(`Starting transcription... File: ${file.name} (${(file.size / 1024 / 1024).toFixed(2)} MB)`);
     const audioPart = await fileToGenerativePart(file);
     
+    // Use stable model
     const model = "gemini-2.5-flash";
     
     let prompt = "";
@@ -129,12 +141,13 @@ export const transcribeAudio = async (file: File, language: Language): Promise<T
         responseSchema: transcriptSchema,
         systemInstruction: language === 'es' 
           ? "Eres un transcriptor experto para periodistas. Tu objetivo es capturar el diálogo con precisión, identificando cambios de hablante."
-          : "Kazetarientzako transkribatzaile aditua zara. Zure helburua elkarrizketa zehaztasunez jasotzea da, hizlari aldaketak identifikatuz."
+          : "Kazetarientzako transkribatzaile aditua zara. Zure helburua elkarrizketa zehaztasunez jasotzea da, hizlari aldaketak identifikatuz.",
+        safetySettings: safetySettings,
       }
     });
 
     const jsonText = response.text;
-    if (!jsonText) throw new Error("Empty response from Gemini API");
+    if (!jsonText) throw new Error("Empty response from Gemini API. The model might have blocked the content.");
     
     const data = JSON.parse(jsonText);
     
@@ -195,6 +208,7 @@ export const refineTranscript = async (
       config: {
         responseMimeType: "application/json",
         responseSchema: transcriptSchema,
+        safetySettings: safetySettings,
       }
     });
 
@@ -214,41 +228,38 @@ export const refineTranscript = async (
   }
 };
 
-// --- NEW FUNCTION: CHAT WITH TRANSCRIPT ---
 export const queryTranscript = async (
   segments: TranscriptSegment[],
-  userQuery: string,
+  query: string,
   language: Language
 ): Promise<string> => {
   const apiKey = getApiKey();
   if (!apiKey) throw new Error("API Key not found.");
 
   const ai = new GoogleGenAI({ apiKey });
-  const model = "gemini-2.5-flash";
-
-  const transcriptContext = segments
+  
+  // Format transcript for context
+  const context = segments
     .map(s => `[${s.startTime}] ${s.speaker}: ${s.text}`)
-    .join("\n");
+    .join('\n');
 
-  const systemPrompt = language === 'es'
-    ? `Eres un asistente experto para periodistas. Tu tarea es analizar la siguiente transcripción y responder a las preguntas del usuario basándote ÚNICAMENTE en el texto proporcionado. Sé conciso, preciso y cita el minuto si es relevante.`
-    : `Kazetarientzako laguntzaile aditua zara. Zure lana transkripzioa aztertzea da eta erabiltzailearen galderei erantzutea, testuan BAKARRIK oinarrituta. Izan zehatza eta aipatu minutua garrantzitsua bada.`;
+  const prompt = `Contexto de la entrevista:\n${context}\n\nPregunta del usuario:\n${query}`;
+  
+  const systemInstruction = language === 'es' 
+    ? "Eres un asistente experto en analizar entrevistas. Responde a la pregunta basándote ÚNICAMENTE en la transcripción proporcionada. Si la respuesta no está en el texto, indícalo. Sé conciso."
+    : "Elkarrizketak aztertzen aditua den laguntzailea zara. Erantzun galderari emandako transkripzioan oinarrituta BAKARRIK. Erantzuna testuan ez badago, adierazi. Izan laburra.";
 
   try {
     const response = await generateWithRetry(ai.models, {
-      model: model,
-      contents: {
-        parts: [
-          { text: "Aquí tienes la transcripción:\n" + transcriptContext },
-          { text: userQuery }
-        ]
-      },
+      model: "gemini-2.5-flash",
+      contents: prompt,
       config: {
-        systemInstruction: systemPrompt
+        systemInstruction: systemInstruction,
+        safetySettings: safetySettings,
       }
     });
 
-    return response.text || (language === 'es' ? "No pude generar una respuesta." : "Ezin izan dut erantzunik sortu.");
+    return response.text || "";
   } catch (error) {
     console.error("Query failed", error);
     throw error;

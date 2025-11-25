@@ -1,10 +1,10 @@
+
 import React, { useState, useEffect, useRef } from 'react';
-import { UploadIcon, MagicIcon, CheckIcon, UndoIcon, RedoIcon, DownloadIcon, PlusIcon, MenuIcon, XMarkIcon, ClockIcon, AlertIcon, TrashIcon, SparklesIcon } from './components/Icons';
+import { UploadIcon, MagicIcon, CheckIcon, UndoIcon, RedoIcon, DownloadIcon, PlusIcon, MenuIcon, XMarkIcon, ClockIcon, AlertIcon, TrashIcon } from './components/Icons';
 import { AudioPlayer } from './components/AudioPlayer';
 import { Editor } from './components/Editor';
-import { AIAssistant } from './components/AIAssistant';
 import { transcribeAudio, refineTranscript } from './services/geminiService';
-import { TranscriptSegment, EditMode, Language, StoredSession } from './types';
+import { TranscriptSegment, EditMode, ProcessingState, Language, StoredSession } from './types';
 import { useAppStore } from './store';
 
 interface HistoryState {
@@ -69,7 +69,6 @@ const App: React.FC = () => {
   const [seekRequest, setSeekRequest] = useState<number | null>(null);
   const [showDownloadMenu, setShowDownloadMenu] = useState(false);
   const [includeTimecodes, setIncludeTimecodes] = useState(true);
-  const [isAIAssistantOpen, setIsAIAssistantOpen] = useState(false);
   const [saveStatus, setSaveStatus] = useState<SaveStatus>('idle');
   
   // Dialog State
@@ -80,7 +79,7 @@ const App: React.FC = () => {
     onConfirm: () => void;
   }>({ isOpen: false, title: '', message: '', onConfirm: () => {} });
   
-  // History State (Keep local for now to track undo/redo of store segments)
+  // History State
   const [history, setHistory] = useState<HistoryState[]>([]);
   const [historyIndex, setHistoryIndex] = useState(-1);
   const isDirtyRef = useRef(false);
@@ -99,7 +98,6 @@ const App: React.FC = () => {
       if (sessionId && isDirtyRef.current && segments.length > 0) {
         setSaveStatus('saving');
         saveCurrentSession();
-        // Artificial delay to show "Saving..."
         setTimeout(() => {
             isDirtyRef.current = false;
             setSaveStatus('saved');
@@ -115,7 +113,6 @@ const App: React.FC = () => {
     return () => {
       clearInterval(intervalId);
       window.removeEventListener('beforeunload', handleBeforeUnload);
-      // Save on unmount if dirty
       if (sessionId && isDirtyRef.current) saveCurrentSession();
     };
   }, [sessionId, segments, saveCurrentSession]);
@@ -187,7 +184,7 @@ const App: React.FC = () => {
     });
   };
 
-  // --- HISTORY HANDLERS ---
+  // --- HISTORY & EDIT HANDLERS ---
 
   const addToHistory = (newSegments: TranscriptSegment[], mode: EditMode) => {
     const newHistory = history.slice(0, historyIndex + 1);
@@ -219,8 +216,6 @@ const App: React.FC = () => {
     }
   };
 
-  // --- LOGIC HANDLERS ---
-
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
       const selectedFile = e.target.files[0];
@@ -244,7 +239,7 @@ const App: React.FC = () => {
         setHistoryIndex(0);
         setProcessingState({ status: 'completed' });
         isDirtyRef.current = true;
-        saveCurrentSession(); // Save immediately on creation
+        saveCurrentSession();
       } catch (error: any) {
         setProcessingState({ status: 'error', message: error.message || (language === 'es' ? 'Error en la transcripción.' : 'Errorea transkripzioan.') });
         console.error(error);
@@ -252,7 +247,6 @@ const App: React.FC = () => {
     }
   };
 
-  // Wrapper for Editor actions to update history
   const onUpdateSegment = (id: string, text: string) => updateSegment(id, text);
   const onUpdateSpeaker = (id: string, speaker: string) => updateSpeaker(id, speaker);
   
@@ -308,9 +302,7 @@ const App: React.FC = () => {
 
   const handleDownload = (format: 'txt' | 'json' | 'md') => {
     let content = '';
-    const currentFileName = fileName || 'transcripcion';
-    const namePart = currentFileName.split('.')[0];
-    const filename = `${namePart}-${editMode.toLowerCase()}.${format}`;
+    const filename = `${fileName.split('.')[0] || 'transcripcion'}-${editMode.toLowerCase()}.${format}`;
     let type = 'text/plain';
 
     if (format === 'json') {
@@ -429,13 +421,6 @@ const App: React.FC = () => {
             </div>
           )}
 
-          <AIAssistant 
-            isOpen={isAIAssistantOpen} 
-            onClose={() => setIsAIAssistantOpen(false)} 
-            segments={segments}
-            language={language}
-          />
-
           <header className="absolute top-0 left-0 right-0 bg-white/90 backdrop-blur-md border-b border-gray-200 z-40 shadow-sm h-16">
             <div className="px-4 sm:px-6 h-full flex items-center justify-between">
               <div className="flex items-center gap-3">
@@ -455,15 +440,6 @@ const App: React.FC = () => {
               </div>
 
               <div className="flex items-center gap-2 sm:gap-4">
-                {/* AI Assistant Toggle */}
-                <button 
-                  onClick={() => setIsAIAssistantOpen(!isAIAssistantOpen)}
-                  className={`p-2 rounded-md transition-colors ${isAIAssistantOpen ? 'text-indigo-600 bg-indigo-50' : 'text-gray-500 hover:text-indigo-600 hover:bg-gray-100'}`}
-                  title={language === 'es' ? 'Copiloto IA' : 'AI Laguntzailea'}
-                >
-                  <SparklesIcon />
-                </button>
-
                 <div className="hidden sm:flex items-center gap-1 border-l border-r border-gray-200 px-2">
                   <button onClick={handleUndo} disabled={!canUndo || isProcessing} className={`p-2 rounded-md transition-colors ${canUndo && !isProcessing ? 'text-gray-600 hover:bg-gray-100 hover:text-indigo-600' : 'text-gray-300 cursor-not-allowed'}`} title="Deshacer"><UndoIcon /></button>
                   <button onClick={handleRedo} disabled={!canRedo || isProcessing} className={`p-2 rounded-md transition-colors ${canRedo && !isProcessing ? 'text-gray-600 hover:bg-gray-100 hover:text-indigo-600' : 'text-gray-300 cursor-not-allowed'}`} title="Rehacer"><RedoIcon /></button>
