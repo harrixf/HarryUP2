@@ -1,9 +1,11 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { UploadIcon, MagicIcon, CheckIcon, UndoIcon, RedoIcon, DownloadIcon, PlusIcon, MenuIcon, XMarkIcon, ClockIcon, AlertIcon, TrashIcon } from './components/Icons';
+import { UploadIcon, MagicIcon, CheckIcon, UndoIcon, RedoIcon, DownloadIcon, PlusIcon, MenuIcon, XMarkIcon, ClockIcon, AlertIcon, TrashIcon, SparklesIcon } from './components/Icons';
 import { AudioPlayer } from './components/AudioPlayer';
 import { Editor } from './components/Editor';
+import { AIAssistant } from './components/AIAssistant';
 import { transcribeAudio, refineTranscript } from './services/geminiService';
-import { TranscriptSegment, EditMode, ProcessingState, Language, StoredSession } from './types';
+import { TranscriptSegment, EditMode, Language, StoredSession } from './types';
+import { useAppStore } from './store';
 
 interface HistoryState {
   segments: TranscriptSegment[];
@@ -48,23 +50,26 @@ const ConfirmDialog: React.FC<ConfirmDialogProps> = ({ isOpen, title, message, o
 };
 
 const App: React.FC = () => {
-  // Core State
+  // Use Zustand Store
+  const { 
+    language, setLanguage, 
+    isSidebarOpen, setSidebarOpen,
+    sessionId, setSessionId,
+    fileName, setFileName,
+    segments, setSegments,
+    editMode, setEditMode,
+    processingState, setProcessingState,
+    savedSessions, saveCurrentSession, deleteSession, loadSession, resetSession,
+    updateSegment, updateSpeaker, deleteSegment, mergeSegment, splitSegment
+  } = useAppStore();
+
+  // Local UI State
   const [file, setFile] = useState<File | null>(null);
-  const [fileName, setFileName] = useState<string>(""); 
-  const [sessionId, setSessionId] = useState<string | null>(null);
-  
-  const [segments, setSegments] = useState<TranscriptSegment[]>([]);
-  const [processingState, setProcessingState] = useState<ProcessingState>({ status: 'idle' });
   const [currentTime, setCurrentTime] = useState(0);
   const [seekRequest, setSeekRequest] = useState<number | null>(null);
-  const [editMode, setEditMode] = useState<EditMode>(EditMode.RAW);
-  const [language, setLanguage] = useState<Language>('es');
-  
-  // UI State
   const [showDownloadMenu, setShowDownloadMenu] = useState(false);
-  const [includeTimecodes, setIncludeTimecodes] = useState(true); // Option to include timestamps in download
-  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
-  const [savedSessions, setSavedSessions] = useState<StoredSession[]>([]);
+  const [includeTimecodes, setIncludeTimecodes] = useState(true);
+  const [isAIAssistantOpen, setIsAIAssistantOpen] = useState(false);
   const [saveStatus, setSaveStatus] = useState<SaveStatus>('idle');
   
   // Dialog State
@@ -75,93 +80,54 @@ const App: React.FC = () => {
     onConfirm: () => void;
   }>({ isOpen: false, title: '', message: '', onConfirm: () => {} });
   
-  // History State
+  // History State (Keep local for now to track undo/redo of store segments)
   const [history, setHistory] = useState<HistoryState[]>([]);
   const [historyIndex, setHistoryIndex] = useState(-1);
-
-  // --- PERSISTENCE REFS & LOGIC ---
-  const segmentsRef = useRef(segments);
-  const editModeRef = useRef(editMode);
-  const fileNameRef = useRef(fileName);
-  const savedSessionsRef = useRef(savedSessions);
-  const languageRef = useRef(language);
   const isDirtyRef = useRef(false);
 
-  useEffect(() => {
-    segmentsRef.current = segments;
-    editModeRef.current = editMode;
-    fileNameRef.current = fileName;
-    savedSessionsRef.current = savedSessions;
-    languageRef.current = language;
-  }, [segments, editMode, fileName, savedSessions, language]);
-
+  // Track changes for dirty state and autosave trigger
   useEffect(() => {
     if (segments.length > 0 && sessionId) {
       isDirtyRef.current = true;
       setSaveStatus('idle');
     }
-  }, [segments, editMode, fileName, sessionId]);
+  }, [segments, sessionId]);
 
+  // Autosave Interval using Store Action
   useEffect(() => {
-    try {
-      const stored = localStorage.getItem('chronicle_sessions');
-      if (stored) {
-        const sessions: StoredSession[] = JSON.parse(stored);
-        setSavedSessions(sessions.sort((a, b) => b.date - a.date));
+    const intervalId = setInterval(() => {
+      if (sessionId && isDirtyRef.current && segments.length > 0) {
+        setSaveStatus('saving');
+        saveCurrentSession();
+        // Artificial delay to show "Saving..."
+        setTimeout(() => {
+            isDirtyRef.current = false;
+            setSaveStatus('saved');
+        }, 500);
       }
-    } catch (e) {
-      console.error("Failed to load sessions", e);
-    }
-  }, []);
+    }, 30000);
 
-  useEffect(() => {
-    const saveSession = () => {
-      if (!sessionId || !isDirtyRef.current || segmentsRef.current.length === 0) return;
-      setSaveStatus('saving');
-      const sessionToSave: StoredSession = {
-        id: sessionId,
-        name: fileNameRef.current || `Transcripción ${new Date().toLocaleDateString()}`,
-        date: Date.now(),
-        segments: segmentsRef.current,
-        language: languageRef.current,
-        editMode: editModeRef.current
-      };
-      const currentSaved = savedSessionsRef.current;
-      const updated = [sessionToSave, ...currentSaved.filter(s => s.id !== sessionId)];
-      try {
-        localStorage.setItem('chronicle_sessions', JSON.stringify(updated));
-        setSavedSessions(updated);
-        isDirtyRef.current = false;
-        setSaveStatus('saved');
-      } catch (e) {
-        console.error("Storage failed", e);
-        setSaveStatus('error');
-      }
+    const handleBeforeUnload = () => {
+       if (sessionId && isDirtyRef.current) saveCurrentSession();
     };
-    const intervalId = setInterval(saveSession, 30000);
-    const handleBeforeUnload = () => saveSession();
     window.addEventListener('beforeunload', handleBeforeUnload);
+
     return () => {
       clearInterval(intervalId);
       window.removeEventListener('beforeunload', handleBeforeUnload);
-      saveSession();
+      // Save on unmount if dirty
+      if (sessionId && isDirtyRef.current) saveCurrentSession();
     };
-  }, [sessionId]);
+  }, [sessionId, segments, saveCurrentSession]);
 
   // --- CONFIRMATION ACTIONS ---
 
   const requestLoadSession = (session: StoredSession) => {
     const doLoad = () => {
-      setSessionId(session.id);
-      setFileName(session.name);
-      setSegments(session.segments);
-      setLanguage(session.language);
-      setEditMode(session.editMode);
-      setFile(null);
+      loadSession(session);
+      setFile(null); // Audio file is not persisted
       setHistory([{ segments: session.segments, mode: session.editMode }]);
       setHistoryIndex(0);
-      setProcessingState({ status: 'completed' });
-      setIsSidebarOpen(false);
       isDirtyRef.current = false;
       setSaveStatus('saved');
       setDialog(prev => ({ ...prev, isOpen: false }));
@@ -190,10 +156,13 @@ const App: React.FC = () => {
         ? 'Esta acción borrará la transcripción permanentemente. No se puede deshacer.' 
         : 'Ekintza honek transkripzioa behin betiko ezabatuko du. Ezin da desegin.',
       onConfirm: () => {
-        const updated = savedSessions.filter(s => s.id !== id);
-        setSavedSessions(updated);
-        localStorage.setItem('chronicle_sessions', JSON.stringify(updated));
-        if (sessionId === id) resetApp();
+        deleteSession(id);
+        if (sessionId === id) {
+            setFile(null);
+            setHistory([]);
+            setHistoryIndex(-1);
+            isDirtyRef.current = false;
+        }
         setDialog(prev => ({ ...prev, isOpen: false }));
       }
     });
@@ -207,25 +176,18 @@ const App: React.FC = () => {
         ? 'Se cerrará la sesión actual. ¿Deseas comenzar un proyecto nuevo?' 
         : 'Uneko saioa itxiko da. Proiektu berri bat hasi nahi duzu?',
       onConfirm: () => {
-        resetApp();
+        resetSession();
+        setFile(null);
+        setHistory([]);
+        setHistoryIndex(-1);
+        isDirtyRef.current = false;
+        setSaveStatus('idle');
         setDialog(prev => ({ ...prev, isOpen: false }));
       }
     });
   };
 
-  const resetApp = () => {
-    setFile(null);
-    setFileName("");
-    setSessionId(null);
-    setProcessingState({ status: 'idle' }); 
-    setSegments([]); 
-    setHistory([]);
-    setHistoryIndex(-1);
-    isDirtyRef.current = false;
-    setSaveStatus('idle');
-  };
-
-  // --- HANDLERS ---
+  // --- HISTORY HANDLERS ---
 
   const addToHistory = (newSegments: TranscriptSegment[], mode: EditMode) => {
     const newHistory = history.slice(0, historyIndex + 1);
@@ -257,6 +219,8 @@ const App: React.FC = () => {
     }
   };
 
+  // --- LOGIC HANDLERS ---
+
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
       const selectedFile = e.target.files[0];
@@ -280,6 +244,7 @@ const App: React.FC = () => {
         setHistoryIndex(0);
         setProcessingState({ status: 'completed' });
         isDirtyRef.current = true;
+        saveCurrentSession(); // Save immediately on creation
       } catch (error: any) {
         setProcessingState({ status: 'error', message: error.message || (language === 'es' ? 'Error en la transcripción.' : 'Errorea transkripzioan.') });
         console.error(error);
@@ -287,61 +252,23 @@ const App: React.FC = () => {
     }
   };
 
-  const handleSegmentChange = (id: string, newText: string) => {
-    setSegments(prev => prev.map(seg => seg.id === id ? { ...seg, text: newText } : seg));
+  // Wrapper for Editor actions to update history
+  const onUpdateSegment = (id: string, text: string) => updateSegment(id, text);
+  const onUpdateSpeaker = (id: string, speaker: string) => updateSpeaker(id, speaker);
+  
+  const onDeleteSegment = (id: string) => {
+    deleteSegment(id);
+    setTimeout(() => addToHistory(useAppStore.getState().segments, editMode), 0);
   };
 
-  const handleSpeakerChange = (id: string, newSpeaker: string) => {
-    setSegments(prev => prev.map(seg => seg.id === id ? { ...seg, speaker: newSpeaker } : seg));
+  const onMergeSegment = (id: string) => {
+    mergeSegment(id);
+    setTimeout(() => addToHistory(useAppStore.getState().segments, editMode), 0);
   };
 
-  const handleDeleteSegment = (id: string) => {
-    const newSegments = segments.filter(seg => seg.id !== id);
-    setSegments(newSegments);
-    addToHistory(newSegments, editMode);
-  };
-
-  const handleMergeSegment = (id: string) => {
-    const index = segments.findIndex(s => s.id === id);
-    if (index <= 0) return; 
-    const prevSegment = segments[index - 1];
-    const currentSegment = segments[index];
-    const mergedText = `${prevSegment.text} ${currentSegment.text}`;
-    const newSegments = [...segments];
-    newSegments[index - 1] = { ...prevSegment, text: mergedText };
-    newSegments.splice(index, 1);
-    setSegments(newSegments);
-    addToHistory(newSegments, editMode);
-  };
-
-  const handleSplitSegment = (id: string, cursorPosition: number) => {
-    const index = segments.findIndex(s => s.id === id);
-    if (index === -1) return;
-
-    const originalSegment = segments[index];
-    const textBefore = originalSegment.text.substring(0, cursorPosition).trim();
-    const textAfter = originalSegment.text.substring(cursorPosition).trim();
-
-    // Allow split even if textAfter is empty (user wants new paragraph at end)
-    
-    const newSegments = [...segments];
-    
-    // Update current segment
-    newSegments[index] = {
-      ...originalSegment,
-      text: textBefore
-    };
-
-    // Insert new segment
-    newSegments.splice(index + 1, 0, {
-      id: `seg-split-${Date.now()}`,
-      speaker: "?", // Placeholder
-      startTime: originalSegment.startTime, // Keep approximate time
-      text: textAfter
-    });
-
-    setSegments(newSegments);
-    addToHistory(newSegments, editMode);
+  const onSplitSegment = (id: string, cursor: number) => {
+    splitSegment(id, cursor);
+    setTimeout(() => addToHistory(useAppStore.getState().segments, editMode), 0);
   };
 
   const handleSegmentBlur = () => {
@@ -381,7 +308,9 @@ const App: React.FC = () => {
 
   const handleDownload = (format: 'txt' | 'json' | 'md') => {
     let content = '';
-    const filename = `${fileName.split('.')[0] || 'transcripcion'}-${editMode.toLowerCase()}.${format}`;
+    const currentFileName = fileName || 'transcripcion';
+    const namePart = currentFileName.split('.')[0];
+    const filename = `${namePart}-${editMode.toLowerCase()}.${format}`;
     let type = 'text/plain';
 
     if (format === 'json') {
@@ -416,7 +345,7 @@ const App: React.FC = () => {
       <div className="w-full max-w-5xl mx-auto flex flex-col md:flex-row gap-8 items-start">
         <div className="bg-white p-8 md:p-12 rounded-2xl shadow-xl text-center w-full md:w-1/2 border border-indigo-50 flex flex-col items-center">
           <div className="flex justify-center mb-6 text-indigo-600"><UploadIcon /></div>
-          <h1 className="text-3xl font-serif font-bold text-gray-900 mb-4">Chronicle AI</h1>
+          <h1 className="text-3xl font-serif font-bold text-gray-900 mb-4">HarryUP</h1>
           <p className="text-gray-600 mb-6 text-lg">
             {language === 'es' ? 'Sube tu entrevista. Obtén una transcripción diarizada, edita mientras escuchas y transforma el estilo al instante.' : 'Igo zure elkarrizketa. Lortu transkripzio diarizatua, editatu entzuten duzun bitartean eta eraldatu estiloa berehala.'}
           </p>
@@ -481,11 +410,11 @@ const App: React.FC = () => {
         <>
           {isSidebarOpen && (
             <div className="fixed inset-0 z-50 flex">
-              <div className="absolute inset-0 bg-black/20 backdrop-blur-sm" onClick={() => setIsSidebarOpen(false)}></div>
+              <div className="absolute inset-0 bg-black/20 backdrop-blur-sm" onClick={() => setSidebarOpen(false)}></div>
               <div className="relative bg-white w-80 shadow-2xl h-full flex flex-col animate-[slideIn_0.3s_ease-out]">
                 <div className="p-4 border-b border-gray-100 flex justify-between items-center bg-gray-50">
                   <h2 className="font-serif font-bold text-gray-800">Transcripciones</h2>
-                  <button onClick={() => setIsSidebarOpen(false)} className="p-2 text-gray-500 hover:bg-gray-200 rounded-full"><XMarkIcon /></button>
+                  <button onClick={() => setSidebarOpen(false)} className="p-2 text-gray-500 hover:bg-gray-200 rounded-full"><XMarkIcon /></button>
                 </div>
                 <div className="flex-1 overflow-y-auto p-4 space-y-2">
                   {savedSessions.map(session => (
@@ -500,12 +429,19 @@ const App: React.FC = () => {
             </div>
           )}
 
+          <AIAssistant 
+            isOpen={isAIAssistantOpen} 
+            onClose={() => setIsAIAssistantOpen(false)} 
+            segments={segments}
+            language={language}
+          />
+
           <header className="absolute top-0 left-0 right-0 bg-white/90 backdrop-blur-md border-b border-gray-200 z-40 shadow-sm h-16">
             <div className="px-4 sm:px-6 h-full flex items-center justify-between">
               <div className="flex items-center gap-3">
-                <button onClick={() => setIsSidebarOpen(true)} className="p-2 -ml-2 rounded-md text-gray-500 hover:bg-gray-100 hover:text-indigo-600 transition-colors"><MenuIcon /></button>
+                <button onClick={() => setSidebarOpen(true)} className="p-2 -ml-2 rounded-md text-gray-500 hover:bg-gray-100 hover:text-indigo-600 transition-colors"><MenuIcon /></button>
                 <div className="w-8 h-8 bg-indigo-600 rounded-lg flex items-center justify-center text-white font-serif font-bold">C</div>
-                <span className="font-serif font-bold text-gray-800 text-lg hidden sm:block">Chronicle</span>
+                <span className="font-serif font-bold text-gray-800 text-lg hidden sm:block">HarryUP</span>
                 <span className="px-2 py-0.5 bg-gray-100 text-gray-500 text-xs font-medium rounded uppercase ml-2">{language}</span>
                 {isProcessing ? (
                   <span className="flex items-center gap-2 text-xs bg-indigo-50 text-indigo-700 px-3 py-1 rounded-full font-medium animate-pulse border border-indigo-100"><span className="w-1.5 h-1.5 rounded-full bg-indigo-600"></span>{processingState.message}</span>
@@ -519,7 +455,16 @@ const App: React.FC = () => {
               </div>
 
               <div className="flex items-center gap-2 sm:gap-4">
-                <div className="hidden sm:flex items-center gap-1 border-r border-gray-200 pr-4 mr-1">
+                {/* AI Assistant Toggle */}
+                <button 
+                  onClick={() => setIsAIAssistantOpen(!isAIAssistantOpen)}
+                  className={`p-2 rounded-md transition-colors ${isAIAssistantOpen ? 'text-indigo-600 bg-indigo-50' : 'text-gray-500 hover:text-indigo-600 hover:bg-gray-100'}`}
+                  title={language === 'es' ? 'Copiloto IA' : 'AI Laguntzailea'}
+                >
+                  <SparklesIcon />
+                </button>
+
+                <div className="hidden sm:flex items-center gap-1 border-l border-r border-gray-200 px-2">
                   <button onClick={handleUndo} disabled={!canUndo || isProcessing} className={`p-2 rounded-md transition-colors ${canUndo && !isProcessing ? 'text-gray-600 hover:bg-gray-100 hover:text-indigo-600' : 'text-gray-300 cursor-not-allowed'}`} title="Deshacer"><UndoIcon /></button>
                   <button onClick={handleRedo} disabled={!canRedo || isProcessing} className={`p-2 rounded-md transition-colors ${canRedo && !isProcessing ? 'text-gray-600 hover:bg-gray-100 hover:text-indigo-600' : 'text-gray-300 cursor-not-allowed'}`} title="Rehacer"><RedoIcon /></button>
                 </div>
@@ -585,14 +530,15 @@ const App: React.FC = () => {
               <div className={`transition-opacity duration-500 ${processingState.status === 'refining' ? 'opacity-50 pointer-events-none grayscale-[0.3]' : 'opacity-100'}`}>
                 <Editor 
                   segments={segments} 
-                  onSegmentChange={handleSegmentChange} 
-                  onSpeakerChange={handleSpeakerChange} 
+                  onSegmentChange={onUpdateSegment} 
+                  onSpeakerChange={onUpdateSpeaker} 
                   onSegmentClick={handleSegmentClick} 
                   onSegmentBlur={handleSegmentBlur} 
-                  onDeleteSegment={handleDeleteSegment} 
-                  onMergeSegment={handleMergeSegment}
-                  onSplitSegment={handleSplitSegment}
+                  onDeleteSegment={onDeleteSegment} 
+                  onMergeSegment={onMergeSegment}
+                  onSplitSegment={onSplitSegment}
                   currentAudioTime={currentTime} 
+                  language={language}
                 />
               </div>
             )}

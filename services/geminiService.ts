@@ -91,7 +91,6 @@ async function generateWithRetry(
 
 export const transcribeAudio = async (file: File, language: Language): Promise<TranscriptSegment[]> => {
   // 1. Check File Size (Client-side safety)
-  // Approx 20MB limit for base64 via Standard API to avoid browser crashes or hard limits
   if (file.size > 25 * 1024 * 1024) {
     throw new Error(language === 'es' 
       ? "El archivo es demasiado grande para la versión web (>25MB). Por favor, compímelo o usa un clip más corto."
@@ -99,21 +98,18 @@ export const transcribeAudio = async (file: File, language: Language): Promise<T
     );
   }
 
-  // 2. Get API Key
   const apiKey = getApiKey();
   if (!apiKey) {
     console.error("CRITICAL: API Key not found in any environment variable.");
     throw new Error("API Key Missing. Please check your configuration.");
   }
 
-  // 3. Initialize Client (Lazy load)
   const ai = new GoogleGenAI({ apiKey });
 
   try {
     console.log(`Starting transcription... File: ${file.name} (${(file.size / 1024 / 1024).toFixed(2)} MB)`);
     const audioPart = await fileToGenerativePart(file);
     
-    // Use flash model
     const model = "gemini-2.5-flash";
     
     let prompt = "";
@@ -123,7 +119,6 @@ export const transcribeAudio = async (file: File, language: Language): Promise<T
       prompt = "Egin audioaren transkripzio zehatza euskaraz. Identifikatu hizlariak etiketa ezberdin eta sekuentzialekin ('Speaker 1', 'Speaker 2', etab). Sortu JSON zerrenda bat hizlaria, hasiera-ordua (MM:SS) eta testu literalarekin.";
     }
 
-    // 4. Call with Retry
     const response = await generateWithRetry(ai.models, {
       model: model,
       contents: {
@@ -143,7 +138,6 @@ export const transcribeAudio = async (file: File, language: Language): Promise<T
     
     const data = JSON.parse(jsonText);
     
-    // Add unique IDs for React rendering
     return data.map((item: any, index: number) => ({
       ...item,
       id: `seg-${index}-${Date.now()}`
@@ -151,14 +145,12 @@ export const transcribeAudio = async (file: File, language: Language): Promise<T
 
   } catch (error: any) {
     console.error("Transcription Error Details:", error);
-    
     if (error.message?.includes("429") || error.status === 429) {
       throw new Error("El sistema está saturado (Error 429). Hemos reintentado varias veces pero la cuota sigue excedida. Por favor, espera 1 minuto.");
     }
     if (error.message?.includes("400")) {
       throw new Error("Error de formato (400). El audio podría no ser compatible o estar corrupto.");
     }
-    
     throw error;
   }
 };
@@ -185,7 +177,6 @@ export const refineTranscript = async (
       prompt = "Reescribe el texto con un estilo periodístico formal. Corrige la gramática, mejora la fluidez y utiliza un vocabulario más preciso y profesional, manteniendo la veracidad de las declaraciones. Devuelve el mismo formato JSON.";
     }
   } else {
-    // Basque prompts
     if (mode === EditMode.CLEANED) {
       prompt = "Ezabatu betegarriak, alferrikako errepikapenak eta zalantza-hotsak ('em', 'ba') hurrengo testutik. Mantendu esanahia eta tonua, baina egin irakurgarriagoa. Itzuli JSON formatu bera.";
     } else if (mode === EditMode.JOURNALISTIC) {
@@ -193,18 +184,13 @@ export const refineTranscript = async (
     }
   }
 
-  // We send the JSON structure and ask for the same structure back with modified text
-  // Optimization: Remove IDs to save tokens
   const contentText = JSON.stringify(segments.map(({ id, ...rest }) => rest));
 
   try {
     const response = await generateWithRetry(ai.models, {
       model: model,
       contents: {
-        parts: [
-            { text: prompt },
-            { text: contentText }
-        ]
+        parts: [{ text: prompt }, { text: contentText }]
       },
       config: {
         responseMimeType: "application/json",
@@ -224,6 +210,47 @@ export const refineTranscript = async (
 
   } catch (error) {
     console.error("Refinement failed", error);
+    throw error;
+  }
+};
+
+// --- NEW FUNCTION: CHAT WITH TRANSCRIPT ---
+export const queryTranscript = async (
+  segments: TranscriptSegment[],
+  userQuery: string,
+  language: Language
+): Promise<string> => {
+  const apiKey = getApiKey();
+  if (!apiKey) throw new Error("API Key not found.");
+
+  const ai = new GoogleGenAI({ apiKey });
+  const model = "gemini-2.5-flash";
+
+  const transcriptContext = segments
+    .map(s => `[${s.startTime}] ${s.speaker}: ${s.text}`)
+    .join("\n");
+
+  const systemPrompt = language === 'es'
+    ? `Eres un asistente experto para periodistas. Tu tarea es analizar la siguiente transcripción y responder a las preguntas del usuario basándote ÚNICAMENTE en el texto proporcionado. Sé conciso, preciso y cita el minuto si es relevante.`
+    : `Kazetarientzako laguntzaile aditua zara. Zure lana transkripzioa aztertzea da eta erabiltzailearen galderei erantzutea, testuan BAKARRIK oinarrituta. Izan zehatza eta aipatu minutua garrantzitsua bada.`;
+
+  try {
+    const response = await generateWithRetry(ai.models, {
+      model: model,
+      contents: {
+        parts: [
+          { text: "Aquí tienes la transcripción:\n" + transcriptContext },
+          { text: userQuery }
+        ]
+      },
+      config: {
+        systemInstruction: systemPrompt
+      }
+    });
+
+    return response.text || (language === 'es' ? "No pude generar una respuesta." : "Ezin izan dut erantzunik sortu.");
+  } catch (error) {
+    console.error("Query failed", error);
     throw error;
   }
 };

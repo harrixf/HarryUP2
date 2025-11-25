@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useMemo } from 'react';
-import { TranscriptSegment } from '../types';
+import { TranscriptSegment, Language } from '../types';
 import { TrashIcon, MergeUpIcon } from './Icons';
 
 interface EditorProps {
@@ -12,6 +12,7 @@ interface EditorProps {
   onMergeSegment: (id: string) => void;
   onSplitSegment: (id: string, cursorPosition: number) => void;
   currentAudioTime: number;
+  language: Language;
 }
 
 const parseTimeString = (timeStr: string): number => {
@@ -50,7 +51,8 @@ export const Editor: React.FC<EditorProps> = ({
   onDeleteSegment,
   onMergeSegment,
   onSplitSegment,
-  currentAudioTime 
+  currentAudioTime,
+  language
 }) => {
   const [activeSegmentIndex, setActiveSegmentIndex] = useState<number>(-1);
 
@@ -186,6 +188,8 @@ export const Editor: React.FC<EditorProps> = ({
                 onFocus={() => onSegmentClick(segment.startTime)}
                 onBlur={onSegmentBlur}
                 style={{ minHeight: '1.5em' }}
+                lang={language}
+                spellCheck={true}
               />
             </div>
           );

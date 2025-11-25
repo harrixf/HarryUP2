@@ -26,3 +26,10 @@ export interface StoredSession {
   language: Language;
   editMode: EditMode;
 }
+
+export interface ChatMessage {
+  id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  isError?: boolean;
+}
