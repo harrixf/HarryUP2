@@ -216,7 +216,6 @@ export const correctSegmentText = async (
   if (language === 'es') {
     prompt = "Corrige la ortografía y la gramática del siguiente texto. No cambies el estilo ni el significado, solo corrige errores obvios. Devuelve solo el texto corregido.";
   } else {
-    // Basque specific instruction to act like Xuxen
     prompt = "Zuzendu ondorengo testua euskaraz. Ortografia eta gramatika akatsak bakarrik zuzendu (Xuxen bezala). Ez aldatu esanahia ezta estiloa ere. Itzuli zuzendutako testua bakarrik.";
   }
 
@@ -239,7 +238,7 @@ export const correctSegmentText = async (
 };
 
 export const queryTranscript = async (
-  segments: TranscriptSegment[], 
+  segments: TranscriptSegment[],
   query: string,
   language: Language
 ): Promise<string> => {
@@ -247,16 +246,15 @@ export const queryTranscript = async (
   if (!apiKey) throw new Error("API Key not found.");
 
   const ai = new GoogleGenAI({ apiKey });
-  const model = "gemini-2.5-flash"; 
+  const model = "gemini-2.5-flash";
+
+  const transcriptText = segments.map(s => `[${s.startTime}] ${s.speaker}: ${s.text}`).join('\n');
   
-  // Construct context from segments
-  const context = segments.map(s => `${s.startTime} ${s.speaker}: ${s.text}`).join('\n');
-  
-  let systemInstruction = "";
+  let systemPrompt = "";
   if (language === 'es') {
-    systemInstruction = "Eres un asistente de redacción experto. Tu tarea es responder preguntas o realizar tareas basadas EXCLUSIVAMENTE en la transcripción proporcionada. Si la respuesta no está en el texto, indícalo. Sé conciso.";
+    systemPrompt = "Eres un asistente útil que responde preguntas basadas en la siguiente transcripción de una entrevista. Responde de manera concisa y precisa usando la información del texto.";
   } else {
-    systemInstruction = "Idazketa laguntzaile aditua zara. Zure zeregina emandako transkripzioan BAKARRIK oinarritutako galderak erantzutea edo atazak egitea da. Erantzuna testuan ez badago, adierazi. Izan zehatza.";
+    systemPrompt = "Laguntzaile erabilgarria zara, ondorengo elkarrizketaren transkripzioan oinarrituta galderak erantzuten dituena. Erantzun labur eta zehatz testuko informazioa erabiliz.";
   }
 
   try {
@@ -264,17 +262,14 @@ export const queryTranscript = async (
       model: model,
       contents: {
         parts: [
-          { text: "TRANSCRIPCIÓN:\n" + context },
-          { text: "SOLICITUD: " + query }
+          { text: systemPrompt },
+          { text: `CONTEXT:\n${transcriptText}` },
+          { text: `QUESTION:\n${query}` }
         ]
       },
-      config: {
-        systemInstruction: systemInstruction,
-      }
     });
 
-    return response.text || "";
-
+    return response.text?.trim() || "";
   } catch (error) {
     console.error("Query failed", error);
     throw error;
