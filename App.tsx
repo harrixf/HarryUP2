@@ -1,9 +1,8 @@
-
 import React, { useState, useEffect, useRef } from 'react';
 import { UploadIcon, MagicIcon, CheckIcon, UndoIcon, RedoIcon, DownloadIcon, PlusIcon, MenuIcon, XMarkIcon, ClockIcon, AlertIcon, TrashIcon } from './components/Icons';
 import { AudioPlayer } from './components/AudioPlayer';
 import { Editor } from './components/Editor';
-import { transcribeAudio, refineTranscript } from './services/geminiService';
+import { transcribeAudio, refineTranscript, correctSegmentText } from './services/geminiService';
 import { TranscriptSegment, EditMode, ProcessingState, Language, StoredSession } from './types';
 import { useAppStore } from './store';
 
@@ -70,6 +69,7 @@ const App: React.FC = () => {
   const [showDownloadMenu, setShowDownloadMenu] = useState(false);
   const [includeTimecodes, setIncludeTimecodes] = useState(true);
   const [saveStatus, setSaveStatus] = useState<SaveStatus>('idle');
+  const [correctingSegmentId, setCorrectingSegmentId] = useState<string | null>(null);
   
   // Dialog State
   const [dialog, setDialog] = useState<{
@@ -263,6 +263,22 @@ const App: React.FC = () => {
   const onSplitSegment = (id: string, cursor: number) => {
     splitSegment(id, cursor);
     setTimeout(() => addToHistory(useAppStore.getState().segments, editMode), 0);
+  };
+
+  const handleCorrectSegment = async (id: string) => {
+    const segment = segments.find(s => s.id === id);
+    if (!segment) return;
+
+    setCorrectingSegmentId(id);
+    try {
+      const correctedText = await correctSegmentText(segment.text, language);
+      updateSegment(id, correctedText);
+      setTimeout(() => addToHistory(useAppStore.getState().segments, editMode), 0);
+    } catch (error) {
+      console.error("Correction failed:", error);
+    } finally {
+      setCorrectingSegmentId(null);
+    }
   };
 
   const handleSegmentBlur = () => {
@@ -513,8 +529,10 @@ const App: React.FC = () => {
                   onDeleteSegment={onDeleteSegment} 
                   onMergeSegment={onMergeSegment}
                   onSplitSegment={onSplitSegment}
+                  onCorrectSegment={handleCorrectSegment}
                   currentAudioTime={currentTime} 
                   language={language}
+                  correctingSegmentId={correctingSegmentId}
                 />
               </div>
             )}

@@ -1,5 +1,3 @@
-
-
 import { GoogleGenAI, Type, Schema } from "@google/genai";
 import { TranscriptSegment, EditMode, Language } from "../types";
 
@@ -204,9 +202,8 @@ export const refineTranscript = async (
   }
 };
 
-export const queryTranscript = async (
-  segments: TranscriptSegment[],
-  question: string,
+export const correctSegmentText = async (
+  text: string,
   language: Language
 ): Promise<string> => {
   const apiKey = getApiKey();
@@ -215,22 +212,60 @@ export const queryTranscript = async (
   const ai = new GoogleGenAI({ apiKey });
   const model = "gemini-2.5-flash";
 
-  // Context preparation
-  const transcriptText = segments
-    .map(s => `[${s.startTime}] ${s.speaker}: ${s.text}`)
-    .join("\n");
+  let prompt = "";
+  if (language === 'es') {
+    prompt = "Corrige la ortografía y la gramática del siguiente texto. No cambies el estilo ni el significado, solo corrige errores obvios. Devuelve solo el texto corregido.";
+  } else {
+    // Basque specific instruction to act like Xuxen
+    prompt = "Zuzendu ondorengo testua euskaraz. Ortografia eta gramatika akatsak bakarrik zuzendu (Xuxen bezala). Ez aldatu esanahia ezta estiloa ere. Itzuli zuzendutako testua bakarrik.";
+  }
 
-  const systemInstruction = language === 'es'
-    ? "Eres un asistente útil y preciso. Responde preguntas basándote únicamente en la transcripción proporcionada. Si no encuentras la respuesta en el texto, indícalo. Mantén un tono profesional."
-    : "Laguntzaile erabilgarria eta zehatza zara. Erantzun galderak emandako transkripzioan oinarrituta soilik. Testuan erantzuna aurkitzen ez baduzu, adierazi. Mantendu tonu profesionala.";
+  try {
+    const response = await generateWithRetry(ai.models, {
+      model: model,
+      contents: {
+        parts: [{ text: prompt }, { text: text }]
+      },
+      config: {
+        responseMimeType: "text/plain", // Plain text response
+      }
+    });
+
+    return response.text?.trim() || text;
+  } catch (error) {
+    console.error("Correction failed", error);
+    return text; // Return original on failure
+  }
+};
+
+export const queryTranscript = async (
+  segments: TranscriptSegment[], 
+  query: string,
+  language: Language
+): Promise<string> => {
+  const apiKey = getApiKey();
+  if (!apiKey) throw new Error("API Key not found.");
+
+  const ai = new GoogleGenAI({ apiKey });
+  const model = "gemini-2.5-flash"; 
+  
+  // Construct context from segments
+  const context = segments.map(s => `${s.startTime} ${s.speaker}: ${s.text}`).join('\n');
+  
+  let systemInstruction = "";
+  if (language === 'es') {
+    systemInstruction = "Eres un asistente de redacción experto. Tu tarea es responder preguntas o realizar tareas basadas EXCLUSIVAMENTE en la transcripción proporcionada. Si la respuesta no está en el texto, indícalo. Sé conciso.";
+  } else {
+    systemInstruction = "Idazketa laguntzaile aditua zara. Zure zeregina emandako transkripzioan BAKARRIK oinarritutako galderak erantzutea edo atazak egitea da. Erantzuna testuan ez badago, adierazi. Izan zehatza.";
+  }
 
   try {
     const response = await generateWithRetry(ai.models, {
       model: model,
       contents: {
         parts: [
-            { text: `TRANSCRIPT:\n${transcriptText}` },
-            { text: `QUESTION: ${question}` }
+          { text: "TRANSCRIPCIÓN:\n" + context },
+          { text: "SOLICITUD: " + query }
         ]
       },
       config: {
@@ -238,9 +273,10 @@ export const queryTranscript = async (
       }
     });
 
-    return response.text || (language === 'es' ? "No pude generar una respuesta." : "Ezin izan dut erantzunik sortu.");
+    return response.text || "";
+
   } catch (error) {
-    console.error("Query Transcript Error:", error);
+    console.error("Query failed", error);
     throw error;
   }
 };

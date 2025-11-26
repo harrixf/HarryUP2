@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useMemo } from 'react';
 import { TranscriptSegment, Language } from '../types';
-import { TrashIcon, MergeUpIcon } from './Icons';
+import { TrashIcon, MergeUpIcon, SpellcheckIcon } from './Icons';
 
 interface EditorProps {
   segments: TranscriptSegment[];
@@ -11,8 +11,10 @@ interface EditorProps {
   onDeleteSegment: (id: string) => void;
   onMergeSegment: (id: string) => void;
   onSplitSegment: (id: string, cursorPosition: number) => void;
+  onCorrectSegment: (id: string) => void;
   currentAudioTime: number;
   language: Language;
+  correctingSegmentId: string | null;
 }
 
 const parseTimeString = (timeStr: string): number => {
@@ -51,8 +53,10 @@ export const Editor: React.FC<EditorProps> = ({
   onDeleteSegment,
   onMergeSegment,
   onSplitSegment,
+  onCorrectSegment,
   currentAudioTime,
-  language
+  language,
+  correctingSegmentId
 }) => {
   const [activeSegmentIndex, setActiveSegmentIndex] = useState<number>(-1);
 
@@ -129,6 +133,7 @@ export const Editor: React.FC<EditorProps> = ({
         {segments.map((segment, index) => {
           const isActive = index === activeSegmentIndex;
           const speakerColor = getSpeakerColor(segment.speaker);
+          const isCorrecting = correctingSegmentId === segment.id;
 
           return (
             <div 
@@ -152,6 +157,20 @@ export const Editor: React.FC<EditorProps> = ({
                 <div className="flex items-center gap-2">
                   {/* Action Buttons - Visible on Hover or Active */}
                   <div className={`flex items-center gap-1 transition-opacity duration-200 ${isActive ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}>
+                    {/* Correction Button */}
+                    <button
+                      onClick={() => onCorrectSegment(segment.id)}
+                      disabled={isCorrecting}
+                      className={`p-1 rounded transition-colors ${isCorrecting ? 'text-indigo-400' : 'text-gray-400 hover:text-indigo-600 hover:bg-indigo-50'}`}
+                      title={language === 'eu' ? "Zuzendu (Xuxen/AI)" : "Corregir ortografía"}
+                    >
+                      {isCorrecting ? (
+                        <div className="animate-spin h-4 w-4 border-2 border-indigo-500 border-t-transparent rounded-full" />
+                      ) : (
+                        <SpellcheckIcon />
+                      )}
+                    </button>
+
                     {index > 0 && (
                       <button
                         onClick={() => onMergeSegment(segment.id)}
@@ -180,13 +199,14 @@ export const Editor: React.FC<EditorProps> = ({
               </div>
               
               <textarea
-                className={`w-full resize-none bg-transparent border-none focus:ring-0 p-0 font-serif text-lg leading-relaxed outline-none transition-colors ${isActive ? 'text-gray-900' : 'text-gray-700'}`}
+                className={`w-full resize-none bg-transparent border-none focus:ring-0 p-0 font-serif text-lg leading-relaxed outline-none transition-colors ${isActive ? 'text-gray-900' : 'text-gray-700'} ${isCorrecting ? 'opacity-50 blur-[1px]' : ''}`}
                 rows={Math.ceil(segment.text.length / 60) || 1}
                 value={segment.text}
                 onChange={(e) => onSegmentChange(segment.id, e.target.value)}
                 onKeyDown={(e) => handleKeyDown(e, segment.id, index)}
                 onFocus={() => onSegmentClick(segment.startTime)}
                 onBlur={onSegmentBlur}
+                readOnly={isCorrecting}
                 style={{ minHeight: '1.5em' }}
                 lang={language}
                 spellCheck={true}
