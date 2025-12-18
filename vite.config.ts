@@ -1,3 +1,4 @@
+
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import path from 'path'
@@ -14,4 +15,8 @@ export default defineConfig({
       '@': path.resolve(__dirname, './'),
     },
   },
+  define: {
+    // Esto permite que process.env.API_KEY esté disponible en el navegador
+    'process.env.API_KEY': JSON.stringify(process.env.API_KEY)
+  }
 })

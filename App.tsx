@@ -1,111 +1,58 @@
 
 import React, { useState, useEffect, useRef } from 'react';
-import { UploadIcon, MagicIcon, CheckIcon, UndoIcon, RedoIcon, DownloadIcon, PlusIcon, MenuIcon, XMarkIcon, ClockIcon, AlertIcon, TrashIcon } from './components/Icons';
+import { UploadIcon, UndoIcon, RedoIcon, DownloadIcon, PlusIcon, MenuIcon, XMarkIcon, TrashIcon, SearchIcon, SparklesIcon, MagicIcon } from './components/Icons';
 import { AudioPlayer } from './components/AudioPlayer';
 import { Editor } from './components/Editor';
-import { transcribeAudio, refineTranscript, correctSegmentText } from './services/geminiService';
-import { TranscriptSegment, EditMode, ProcessingState, Language, StoredSession } from './types';
+import { AIAssistant } from './components/AIAssistant';
+import { transcribeAudio, refineTranscript, correctSegmentText, reviewTranscript } from './services/geminiService';
+import { TranscriptSegment, EditMode, Language } from './types';
 import { useAppStore } from './store';
 
-interface HistoryState {
-  segments: TranscriptSegment[];
-  mode: EditMode;
-}
-
-type SaveStatus = 'saved' | 'saving' | 'error' | 'idle';
-
-interface ConfirmDialogProps {
-  isOpen: boolean;
-  title: string;
-  message: string;
-  onConfirm: () => void;
-  onCancel: () => void;
-}
-
-const ConfirmDialog: React.FC<ConfirmDialogProps> = ({ isOpen, title, message, onConfirm, onCancel }) => {
-  if (!isOpen) return null;
-  return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm animate-[fadeIn_0.2s_ease-out]">
-      <div className="bg-white rounded-xl shadow-2xl max-w-md w-full p-6 transform scale-100 animate-[scaleIn_0.2s_ease-out] border border-gray-100">
-        <h3 className="text-lg font-serif font-bold text-gray-900 mb-3">{title}</h3>
-        <p className="text-gray-600 mb-8 leading-relaxed text-sm">{message}</p>
-        <div className="flex justify-end gap-3">
-          <button onClick={onCancel} className="px-4 py-2.5 rounded-lg text-gray-600 hover:bg-gray-100 font-medium transition-colors text-sm">Cancelar</button>
-          <button onClick={onConfirm} className="px-5 py-2.5 rounded-lg bg-indigo-600 text-white hover:bg-indigo-700 font-medium shadow-md transition-all hover:shadow-lg text-sm active:scale-95">Confirmar</button>
-        </div>
-      </div>
-    </div>
-  );
-};
+interface HistoryState { segments: TranscriptSegment[]; mode: EditMode; }
 
 const App: React.FC = () => {
   const { 
-    language, setLanguage, 
-    isSidebarOpen, setSidebarOpen,
-    sessionId, setSessionId,
-    fileName, setFileName,
-    segments, setSegments,
-    editMode, setEditMode,
-    processingState, setProcessingState,
-    savedSessions, saveCurrentSession, deleteSession, loadSession, resetSession,
-    updateSegment, updateSpeaker, deleteSegment, mergeSegment, splitSegment
+    language, setLanguage, setSidebarOpen, sessionId, setSessionId, fileName, setFileName, segments, setSegments, editMode, setEditMode, processingState, setProcessingState, saveCurrentSession, resetSession, updateSegment, updateSpeaker, deleteSegment, mergeSegment, splitSegment 
   } = useAppStore();
 
   const [file, setFile] = useState<File | null>(null);
   const [currentTime, setCurrentTime] = useState(0);
   const [seekRequest, setSeekRequest] = useState<number | null>(null);
   const [showDownloadMenu, setShowDownloadMenu] = useState(false);
-  const [includeTimecodes, setIncludeTimecodes] = useState(true);
-  const [saveStatus, setSaveStatus] = useState<SaveStatus>('idle');
+  const [isAiAssistantOpen, setIsAiAssistantOpen] = useState(false);
+  const [searchTerm, setSearchTerm] = useState('');
   const [correctingSegmentId, setCorrectingSegmentId] = useState<string | null>(null);
-  const [dialog, setDialog] = useState({ isOpen: false, title: '', message: '', onConfirm: () => {} });
   const [history, setHistory] = useState<HistoryState[]>([]);
   const [historyIndex, setHistoryIndex] = useState(-1);
-  const isDirtyRef = useRef(false);
+  const [isReviewing, setIsReviewing] = useState(false);
+  const [needsApiKey, setNeedsApiKey] = useState(false);
 
   useEffect(() => {
-    if (segments.length > 0 && sessionId) {
-      isDirtyRef.current = true;
-      setSaveStatus('idle');
-    }
-  }, [segments, sessionId]);
-
-  useEffect(() => {
-    const intervalId = setInterval(() => {
-      if (sessionId && isDirtyRef.current && segments.length > 0) {
-        setSaveStatus('saving');
-        saveCurrentSession();
-        setTimeout(() => {
-            isDirtyRef.current = false;
-            setSaveStatus('saved');
-        }, 500);
+    const checkKey = async () => {
+      if (typeof window !== 'undefined' && (window as any).aistudio) {
+        const hasKey = await (window as any).aistudio.hasSelectedApiKey();
+        if (!hasKey && !process.env.API_KEY) {
+          setNeedsApiKey(true);
+        }
       }
-    }, 30000);
-    return () => clearInterval(intervalId);
-  }, [sessionId, segments, saveCurrentSession]);
+    };
+    checkKey();
+  }, []);
 
-  const addToHistory = (newSegments: TranscriptSegment[], mode: EditMode) => {
-    const newHistory = history.slice(0, historyIndex + 1);
-    newHistory.push({ segments: JSON.parse(JSON.stringify(newSegments)), mode });
-    setHistory(newHistory);
-    setHistoryIndex(newHistory.length - 1);
-  };
-
-  const handleUndo = () => {
-    if (historyIndex > 0) {
-      const state = history[historyIndex - 1];
-      setSegments(state.segments);
-      setEditMode(state.mode);
-      setHistoryIndex(historyIndex - 1);
+  const handleOpenKeySelector = async () => {
+    if ((window as any).aistudio) {
+      await (window as any).aistudio.openSelectKey();
+      setNeedsApiKey(false);
+      // Tras seleccionar, procedemos a recargar o reintentar si fuera necesario
     }
   };
 
-  const handleRedo = () => {
-    if (historyIndex < history.length - 1) {
-      const state = history[historyIndex + 1];
-      setSegments(state.segments);
-      setEditMode(state.mode);
-      setHistoryIndex(historyIndex + 1);
+  const handleError = (error: any) => {
+    if (error.message === 'API_KEY_MISSING' || error.message === 'API_KEY_INVALID') {
+      setNeedsApiKey(true);
+      setProcessingState({ status: 'error', message: "Se requiere configurar una API Key válida." });
+    } else {
+      setProcessingState({ status: 'error', message: error.message });
     }
   };
 
@@ -114,17 +61,9 @@ const App: React.FC = () => {
       const selectedFile = e.target.files[0];
       setFile(selectedFile);
       setFileName(selectedFile.name);
-
-      if (sessionId && segments.length > 0) {
-        setProcessingState({ status: 'completed' });
-        return;
-      }
-
       setSessionId(Date.now().toString());
-      setProcessingState({ status: 'uploading', message: 'Procesando archivo...' });
-      
+      setProcessingState({ status: 'transcribing', message: language === 'es' ? 'Transcribiendo...' : 'Transkribatzen...' });
       try {
-        setProcessingState({ status: 'transcribing', message: language === 'es' ? 'Transcribiendo audio/vídeo (hasta 2h)...' : 'Audioa/Bideoa transkribatzen (2h-ra arte)...' });
         const transcript = await transcribeAudio(selectedFile, language);
         setSegments(transcript);
         setHistory([{ segments: transcript, mode: EditMode.RAW }]);
@@ -132,146 +71,150 @@ const App: React.FC = () => {
         setProcessingState({ status: 'completed' });
         saveCurrentSession();
       } catch (error: any) {
-        setProcessingState({ status: 'error', message: error.message });
+        handleError(error);
       }
     }
   };
 
-  const handleCorrectSegment = async (id: string) => {
-    const segment = segments.find(s => s.id === id);
-    if (!segment) return;
-    setCorrectingSegmentId(id);
+  const handleDownloadWithReview = async (format: 'txt' | 'md') => {
+    setShowDownloadMenu(false);
+    setIsReviewing(true);
+    setProcessingState({ status: 'refining', message: language === 'es' ? 'Revisión final IA...' : 'Azken IA berrikuspena...' });
     try {
-      const correctedText = await correctSegmentText(segment.text, language);
-      updateSegment(id, correctedText);
-      addToHistory(useAppStore.getState().segments, editMode);
+      const reviewedText = await reviewTranscript(segments, language);
+      const name = `${fileName.split('.')[0]}_revisado.${format}`;
+      const blob = new Blob([reviewedText], { type: 'text/plain' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = name;
+      a.click();
+    } catch (error) {
+      handleError(error);
     } finally {
-      setCorrectingSegmentId(null);
-    }
-  };
-
-  const handleRefine = async (mode: EditMode) => {
-    if (mode === editMode || segments.length === 0) return;
-    setProcessingState({ status: 'refining', message: language === 'es' ? 'Refinando texto con IA...' : 'Testua IArekin hobetzen...' });
-    try {
-      const newSegments = await refineTranscript(segments, mode, language);
-      setSegments(newSegments);
-      setEditMode(mode);
-      addToHistory(newSegments, mode);
+      setIsReviewing(false);
       setProcessingState({ status: 'completed' });
-    } catch (error: any) {
-      setProcessingState({ status: 'error', message: "Error al refinar" });
     }
   };
 
-  const handleDownload = (format: 'txt' | 'json' | 'md') => {
-    let content = '';
-    const name = `${fileName.split('.')[0] || 'transcripcion'}.${format}`;
-    if (format === 'json') content = JSON.stringify(segments, null, 2);
-    else {
-      content = segments.map(s => `${includeTimecodes ? `[${s.startTime}] ` : ''}${s.speaker}: ${s.text}`).join('\n\n');
-    }
+  const handleDownloadRaw = (format: 'txt' | 'md' | 'json') => {
+    setShowDownloadMenu(false);
+    let content = format === 'json' ? JSON.stringify(segments, null, 2) : segments.map(s => `[${s.startTime}] ${s.speaker}: ${s.text}`).join('\n\n');
     const blob = new Blob([content], { type: 'text/plain' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = name;
+    a.download = `${fileName.split('.')[0]}.${format}`;
     a.click();
   };
 
-  const renderLanding = () => (
-    <div className="flex flex-col items-center justify-center min-h-screen bg-gradient-to-b from-gray-50 to-indigo-50/50 p-6">
-      <div className="w-full max-w-5xl mx-auto flex flex-col md:flex-row gap-8 items-center">
-        <div className="bg-white p-8 md:p-12 rounded-2xl shadow-xl text-center w-full md:w-1/2 border border-indigo-50">
+  if (needsApiKey) {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-screen bg-paper p-6 text-center">
+        <div className="max-w-md w-full bg-white p-10 rounded-2xl shadow-xl border border-indigo-100">
+          <div className="text-indigo-600 mb-6 flex justify-center"><SparklesIcon /></div>
+          <h1 className="text-2xl font-serif font-bold mb-4">Configuración Requerida</h1>
+          <p className="text-gray-600 mb-8">Para usar los modelos avanzados de HarryUP, necesitas conectar tu cuenta de Google Gemini API.</p>
+          <button onClick={handleOpenKeySelector} className="w-full bg-indigo-600 text-white py-4 rounded-xl font-bold hover:bg-indigo-700 transition-all shadow-lg active:scale-95 mb-4">
+            Conectar API Key
+          </button>
+          <a href="https://ai.google.dev/gemini-api/docs/billing" target="_blank" rel="noreferrer" className="text-xs text-indigo-500 hover:underline">
+            ¿Cómo obtener una clave? (Billing Doc)
+          </a>
+        </div>
+      </div>
+    );
+  }
+
+  if (!sessionId && processingState.status === 'idle') {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-screen bg-paper p-6">
+        <div className="max-w-md w-full bg-white p-10 rounded-2xl shadow-xl border border-gray-100 text-center">
           <div className="flex justify-center mb-6 text-indigo-600"><UploadIcon /></div>
-          <h1 className="text-3xl font-serif font-bold text-gray-900 mb-4">HarryUP</h1>
-          <p className="text-gray-600 mb-6 text-lg">
-            {language === 'es' ? 'Soporte para MP4 y Audio de hasta 2 horas (máx. 50MB). Transcripción con diarización automática.' : 'MP4 eta audioa 2 ordura arte (gehienez 50MB). Transkripzioa eta hizlarien identifikazio automatikoa.'}
-          </p>
-          <div className="mb-8 flex justify-center gap-2">
-            <button onClick={() => setLanguage('es')} className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${language === 'es' ? 'bg-indigo-600 text-white' : 'bg-gray-100 text-gray-500'}`}>ES</button>
-            <button onClick={() => setLanguage('eu')} className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${language === 'eu' ? 'bg-indigo-600 text-white' : 'bg-gray-100 text-gray-500'}`}>EU</button>
+          <h1 className="text-3xl font-serif font-bold mb-4">HarryUP</h1>
+          <p className="text-gray-500 mb-8">Audio y Vídeo hasta 50MB / 2h.</p>
+          <div className="flex justify-center gap-2 mb-8">
+            <button onClick={() => setLanguage('es')} className={`px-3 py-1 rounded ${language === 'es' ? 'bg-indigo-600 text-white' : 'bg-gray-100'}`}>ES</button>
+            <button onClick={() => setLanguage('eu')} className={`px-3 py-1 rounded ${language === 'eu' ? 'bg-indigo-600 text-white' : 'bg-gray-100'}`}>EU</button>
           </div>
-          <label className="relative cursor-pointer group block w-full">
-            <div className="bg-indigo-600 text-white px-8 py-4 rounded-full font-medium text-lg shadow-lg group-hover:bg-indigo-700 transition-all transform group-hover:scale-105 active:scale-95 w-full">
-               {language === 'es' ? 'Subir Audio o Vídeo' : 'Igo Audioa edo Bideoa'}
-            </div>
-            <input type="file" accept="audio/*,video/mp4,video/quicktime,video/x-m4v" onChange={handleFileChange} className="hidden" />
+          <label className="block w-full bg-indigo-600 text-white py-4 rounded-xl font-bold cursor-pointer hover:bg-indigo-700 transition-all shadow-lg active:scale-95">
+            {language === 'es' ? 'Empezar ahora' : 'Hasi orain'}
+            <input type="file" accept="audio/*,video/*" onChange={handleFileChange} className="hidden" />
           </label>
         </div>
-        {savedSessions.length > 0 && (
-          <div className="w-full md:w-1/2 bg-white/50 backdrop-blur-sm rounded-2xl p-6 border border-gray-200">
-            <h2 className="text-xl font-bold text-gray-800 mb-4 font-serif flex items-center gap-2"><ClockIcon />{language === 'es' ? 'Recientes' : 'Azkenak'}</h2>
-            <div className="space-y-3">
-              {savedSessions.slice(0, 5).map(s => (
-                <div key={s.id} onClick={() => loadSession(s)} className="bg-white p-4 rounded-xl border border-gray-200 hover:border-indigo-300 transition-all cursor-pointer flex justify-between items-center group">
-                  <span className="font-medium text-gray-700 truncate max-w-[200px]">{s.name}</span>
-                  <button onClick={(e) => {e.stopPropagation(); deleteSession(s.id);}} className="text-gray-300 hover:text-red-500 opacity-0 group-hover:opacity-100"><TrashIcon /></button>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
       </div>
-    </div>
-  );
-
-  const isProcessing = ['uploading', 'transcribing', 'refining'].includes(processingState.status);
+    );
+  }
 
   return (
     <div className="h-screen bg-paper flex flex-col overflow-hidden">
-      <ConfirmDialog isOpen={dialog.isOpen} title={dialog.title} message={dialog.message} onConfirm={dialog.onConfirm} onCancel={() => setDialog({ ...dialog, isOpen: false })} />
-      
-      {!sessionId && processingState.status === 'idle' ? renderLanding() : (
-        <>
-          <header className="bg-white border-b border-gray-200 h-16 flex items-center justify-between px-6 z-40">
-            <div className="flex items-center gap-4">
-              <button onClick={() => setSidebarOpen(true)} className="p-2 text-gray-500 hover:bg-gray-100 rounded-lg"><MenuIcon /></button>
-              <h1 className="font-serif font-bold text-gray-800 text-xl">HarryUP</h1>
-              {isProcessing && <span className="text-xs bg-indigo-50 text-indigo-600 px-3 py-1 rounded-full animate-pulse">{processingState.message}</span>}
-            </div>
-            <div className="flex items-center gap-2">
-              <button onClick={handleUndo} disabled={historyIndex <= 0} className="p-2 text-gray-400 disabled:opacity-30"><UndoIcon /></button>
-              <button onClick={handleRedo} disabled={historyIndex >= history.length - 1} className="p-2 text-gray-400 disabled:opacity-30"><RedoIcon /></button>
-              <button onClick={() => handleRefine(EditMode.CLEANED)} className={`px-4 py-2 rounded-lg text-sm font-medium ${editMode === EditMode.CLEANED ? 'bg-indigo-600 text-white' : 'bg-gray-100 text-gray-600'}`}>Limpiar</button>
-              <button onClick={() => handleRefine(EditMode.JOURNALISTIC)} className={`px-4 py-2 rounded-lg text-sm font-medium ${editMode === EditMode.JOURNALISTIC ? 'bg-indigo-600 text-white' : 'bg-gray-100 text-gray-600'}`}>Periodístico</button>
-              <button onClick={() => setShowDownloadMenu(!showDownloadMenu)} className="p-2 bg-gray-100 rounded-lg"><DownloadIcon /></button>
-              {showDownloadMenu && (
-                <div className="absolute right-6 top-14 bg-white shadow-xl border border-gray-100 rounded-xl py-2 w-40">
-                   <button onClick={() => handleDownload('txt')} className="w-full text-left px-4 py-2 hover:bg-gray-50">Texto (.txt)</button>
-                   <button onClick={() => handleDownload('md')} className="w-full text-left px-4 py-2 hover:bg-gray-50">Markdown (.md)</button>
-                </div>
-              )}
-              <button onClick={() => resetSession()} className="p-2 text-red-500 ml-2"><PlusIcon /></button>
-            </div>
-          </header>
+      <header className="bg-white border-b border-gray-200 h-16 flex items-center justify-between px-6 z-40 gap-4">
+        <div className="flex items-center gap-4 shrink-0">
+          <button onClick={() => setSidebarOpen(true)} className="p-2 text-gray-400 hover:bg-gray-100 rounded-lg"><MenuIcon /></button>
+          <h1 className="font-serif font-bold text-gray-800 text-xl hidden sm:block">HarryUP</h1>
+        </div>
 
-          <main className="flex-grow overflow-y-auto">
-            {processingState.status === 'error' ? (
-              <div className="p-20 text-center text-red-600 font-medium">{processingState.message}</div>
-            ) : (
-              <Editor 
-                segments={segments} 
-                onSegmentChange={updateSegment} 
-                onSpeakerChange={updateSpeaker} 
-                onSegmentClick={(time) => {
-                  const [m, s] = time.split(':').map(Number);
-                  setSeekRequest(m * 60 + s);
-                }}
-                onSegmentBlur={() => {}} 
-                onDeleteSegment={deleteSegment} 
-                onMergeSegment={mergeSegment}
-                onSplitSegment={splitSegment}
-                onCorrectSegment={handleCorrectSegment}
-                currentAudioTime={currentTime} 
-                language={language}
-                correctingSegmentId={correctingSegmentId}
-              />
-            )}
-          </main>
+        <div className="flex-1 max-w-xl relative">
+          <div className="absolute inset-y-0 left-3 flex items-center pointer-events-none text-gray-400"><SearchIcon /></div>
+          <input
+            type="text" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)}
+            placeholder={language === 'es' ? "Buscar por palabra o hablante..." : "Bilatu hitzez edo hizlariz..."}
+            className="w-full pl-10 pr-10 py-2 bg-gray-50 border border-gray-200 rounded-full text-sm focus:bg-white focus:ring-2 focus:ring-indigo-100 transition-all outline-none"
+          />
+          {searchTerm && <button onClick={() => setSearchTerm('')} className="absolute inset-y-0 right-3 flex items-center text-gray-400 hover:text-gray-600"><XMarkIcon /></button>}
+        </div>
 
-          <AudioPlayer file={file} currentTime={currentTime} onTimeUpdate={setCurrentTime} onLoadedMetadata={() => {}} seekRequest={seekRequest} />
-        </>
+        <div className="flex items-center gap-2 shrink-0">
+          <button onClick={() => setIsAiAssistantOpen(!isAiAssistantOpen)} className={`p-2 rounded-lg transition-colors ${isAiAssistantOpen ? 'bg-indigo-100 text-indigo-600' : 'text-gray-400 hover:bg-gray-100'}`}><SparklesIcon /></button>
+          <div className="h-6 w-px bg-gray-200 mx-1"></div>
+          <button onClick={() => setShowDownloadMenu(!showDownloadMenu)} className="p-2 bg-indigo-600 text-white rounded-lg shadow-sm hover:bg-indigo-700"><DownloadIcon /></button>
+          {showDownloadMenu && (
+            <div className="absolute right-6 top-14 bg-white shadow-2xl border border-gray-100 rounded-xl py-2 w-56 animate-[scaleIn_0.1s_ease-out]">
+              <div className="px-4 py-2 text-[10px] font-bold text-gray-400 uppercase tracking-widest">Revisión IA (Pro)</div>
+              <button onClick={() => handleDownloadWithReview('md')} className="w-full text-left px-4 py-2 text-sm hover:bg-indigo-50 text-indigo-600 font-medium">✨ Revisar y bajar .md</button>
+              <div className="h-px bg-gray-100 my-1"></div>
+              <div className="px-4 py-2 text-[10px] font-bold text-gray-400 uppercase tracking-widest">Original</div>
+              <button onClick={() => handleDownloadRaw('txt')} className="w-full text-left px-4 py-2 text-sm hover:bg-gray-50">Texto (.txt)</button>
+              <button onClick={() => handleDownloadRaw('json')} className="w-full text-left px-4 py-2 text-sm hover:bg-gray-50">JSON (.json)</button>
+            </div>
+          )}
+          <button onClick={() => resetSession()} className="p-2 text-gray-400 hover:text-red-500"><PlusIcon /></button>
+        </div>
+      </header>
+
+      <main className="flex-grow overflow-y-auto relative">
+        <Editor 
+          segments={segments} searchTerm={searchTerm}
+          onSegmentChange={updateSegment} onSpeakerChange={updateSpeaker}
+          onSegmentClick={(t) => { const [m,s] = t.split(':').map(Number); setSeekRequest(m*60+s); }}
+          onDeleteSegment={deleteSegment} onMergeSegment={mergeSegment} onSplitSegment={splitSegment}
+          onCorrectSegment={async (id) => {
+             const s = segments.find(seg => seg.id === id);
+             if (!s) return;
+             setCorrectingSegmentId(id);
+             try {
+                const txt = await correctSegmentText(s.text, language);
+                updateSegment(id, txt);
+             } catch (err) { handleError(err); }
+             setCorrectingSegmentId(null);
+          }}
+          currentAudioTime={currentTime} language={language} correctingSegmentId={correctingSegmentId}
+          onSegmentBlur={() => {}}
+        />
+        <AIAssistant isOpen={isAiAssistantOpen} onClose={() => setIsAiAssistantOpen(false)} segments={segments} language={language} />
+      </main>
+
+      <AudioPlayer file={file} currentTime={currentTime} onTimeUpdate={setCurrentTime} onLoadedMetadata={() => {}} seekRequest={seekRequest} />
+      {isReviewing && <div className="fixed inset-0 bg-white/60 backdrop-blur-sm z-[60] flex items-center justify-center flex-col gap-4">
+        <div className="animate-spin rounded-full h-12 w-12 border-4 border-indigo-600 border-t-transparent"></div>
+        <p className="font-serif font-bold text-indigo-900">{processingState.message}</p>
+      </div>}
+      {processingState.status === 'error' && !needsApiKey && (
+        <div className="fixed top-20 right-6 bg-red-50 border border-red-200 p-4 rounded-xl shadow-lg flex items-center gap-3 animate-[slideIn_0.3s_ease-out]">
+          <div className="text-red-500"><XMarkIcon /></div>
+          <p className="text-sm text-red-700 font-medium">{processingState.message}</p>
+          <button onClick={() => setProcessingState({ status: 'completed' })} className="text-red-400 hover:text-red-600"><XMarkIcon /></button>
+        </div>
       )}
     </div>
   );

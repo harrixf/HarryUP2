@@ -1,6 +1,7 @@
+
 import React, { useEffect, useState, useMemo } from 'react';
 import { TranscriptSegment, Language } from '../types';
-import { TrashIcon, MergeUpIcon, SpellcheckIcon } from './Icons';
+import { TrashIcon, MergeUpIcon, SpellcheckIcon, SearchIcon, XMarkIcon } from './Icons';
 
 interface EditorProps {
   segments: TranscriptSegment[];
@@ -15,58 +16,35 @@ interface EditorProps {
   currentAudioTime: number;
   language: Language;
   correctingSegmentId: string | null;
+  searchTerm: string;
 }
 
 const parseTimeString = (timeStr: string): number => {
   const parts = timeStr.split(':').map(Number);
-  if (parts.length === 2) {
-    return parts[0] * 60 + parts[1];
-  }
-  return 0;
+  return parts.length === 2 ? parts[0] * 60 + parts[1] : 0;
 };
 
-// Generate distinct colors based on speaker name
 const getSpeakerColor = (name: string) => {
-  const colors = [
-    'text-indigo-600',
-    'text-emerald-600',
-    'text-amber-600',
-    'text-rose-600',
-    'text-cyan-600',
-    'text-fuchsia-600',
-    'text-blue-600',
-    'text-violet-600',
-  ];
+  const colors = ['text-indigo-600', 'text-emerald-600', 'text-amber-600', 'text-rose-600', 'text-cyan-600', 'text-fuchsia-600', 'text-blue-600', 'text-violet-600'];
   let hash = 0;
-  for (let i = 0; i < name.length; i++) {
-    hash = name.charCodeAt(i) + ((hash << 5) - hash);
-  }
+  for (let i = 0; i < name.length; i++) hash = name.charCodeAt(i) + ((hash << 5) - hash);
   return colors[Math.abs(hash) % colors.length];
 };
 
 export const Editor: React.FC<EditorProps> = ({ 
-  segments, 
-  onSegmentChange, 
-  onSpeakerChange,
-  onSegmentClick, 
-  onSegmentBlur,
-  onDeleteSegment,
-  onMergeSegment,
-  onSplitSegment,
-  onCorrectSegment,
-  currentAudioTime,
-  language,
-  correctingSegmentId
+  segments, onSegmentChange, onSpeakerChange, onSegmentClick, onSegmentBlur, onDeleteSegment, onMergeSegment, onSplitSegment, onCorrectSegment, currentAudioTime, language, correctingSegmentId, searchTerm
 }) => {
   const [activeSegmentIndex, setActiveSegmentIndex] = useState<number>(-1);
 
-  // Extract unique speakers for the dropdown/datalist
-  const uniqueSpeakers = useMemo(() => {
-    const speakers = new Set(segments.map(s => s.speaker));
-    return Array.from(speakers).filter(Boolean);
-  }, [segments]);
+  const filteredSegments = useMemo(() => {
+    if (!searchTerm.trim()) return segments;
+    const lowerSearch = searchTerm.toLowerCase();
+    return segments.filter(s => 
+      s.text.toLowerCase().includes(lowerSearch) || 
+      s.speaker.toLowerCase().includes(lowerSearch)
+    );
+  }, [segments, searchTerm]);
 
-  // Detect active segment based on time
   useEffect(() => {
     const index = segments.findIndex((segment, i) => {
       const start = parseTimeString(segment.startTime);
@@ -74,142 +52,73 @@ export const Editor: React.FC<EditorProps> = ({
       const end = nextSegment ? parseTimeString(nextSegment.startTime) : start + 30;
       return currentAudioTime >= start && currentAudioTime < end;
     });
-
-    if (index !== -1 && index !== activeSegmentIndex) {
-      setActiveSegmentIndex(index);
-    }
+    if (index !== -1 && index !== activeSegmentIndex) setActiveSegmentIndex(index);
   }, [currentAudioTime, segments, activeSegmentIndex]);
 
-  // Auto-scroll to active segment
   useEffect(() => {
-    if (activeSegmentIndex !== -1) {
+    if (activeSegmentIndex !== -1 && !searchTerm) {
       const el = document.getElementById(`segment-${activeSegmentIndex}`);
-      if (el) {
-        el.scrollIntoView({
-          behavior: 'smooth',
-          block: 'center',
-          inline: 'nearest'
-        });
-      }
+      el?.scrollIntoView({ behavior: 'smooth', block: 'center' });
     }
-  }, [activeSegmentIndex]);
+  }, [activeSegmentIndex, searchTerm]);
 
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>, id: string, index: number) => {
-    // Merge on Backspace at start of text
-    if (e.key === 'Backspace') {
-      const target = e.currentTarget;
-      if (target.selectionStart === 0 && target.selectionEnd === 0) {
-        if (target.value.length === 0) {
-           // If empty, just delete
-           e.preventDefault();
-           onDeleteSegment(id);
-        } else if (index > 0) {
-           // If not empty but at start, merge with previous
-           e.preventDefault();
-           onMergeSegment(id);
-        }
-      }
-    }
-
-    // Split on Enter
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      const target = e.currentTarget;
-      const cursorPosition = target.selectionStart;
-      onSplitSegment(id, cursorPosition);
-    }
+  const highlightText = (text: string) => {
+    if (!searchTerm.trim()) return text;
+    const parts = text.split(new RegExp(`(${searchTerm})`, 'gi'));
+    return parts.map((part, i) => 
+      part.toLowerCase() === searchTerm.toLowerCase() 
+        ? <mark key={i} className="bg-yellow-200 text-ink rounded-sm px-0.5">{part}</mark> 
+        : part
+    );
   };
 
   return (
     <div className="max-w-3xl mx-auto pb-40 pt-8 px-4 sm:px-6">
-      {/* Global Datalist for Speakers */}
       <datalist id="known-speakers">
-        {uniqueSpeakers.map((speaker) => (
-          <option key={speaker} value={speaker} />
-        ))}
+        {Array.from(new Set(segments.map(s => s.speaker))).map(s => <option key={s} value={s} />)}
       </datalist>
 
+      {filteredSegments.length === 0 && searchTerm && (
+        <div className="text-center py-20 text-gray-400">
+          <p>{language === 'es' ? 'No se encontraron resultados para su búsqueda.' : 'Ez da emaitzarik aurkitu zure bilaketarako.'}</p>
+        </div>
+      )}
+
       <div className="space-y-6">
-        {segments.map((segment, index) => {
-          const isActive = index === activeSegmentIndex;
+        {filteredSegments.map((segment) => {
+          const originalIndex = segments.findIndex(s => s.id === segment.id);
+          const isActive = originalIndex === activeSegmentIndex;
           const speakerColor = getSpeakerColor(segment.speaker);
           const isCorrecting = correctingSegmentId === segment.id;
 
           return (
-            <div 
-              key={segment.id} 
-              id={`segment-${index}`}
-              className={`group relative p-4 rounded-lg transition-all duration-300 border-l-4 scroll-mt-32 scroll-mb-32 ${isActive ? 'bg-indigo-50 border-indigo-500 shadow-sm' : 'bg-white border-transparent hover:bg-gray-50'}`}
-            >
-              <div className="flex items-center justify-between mb-2 gap-4 relative">
-                <div className="relative w-full">
-                  <input
-                    type="text"
-                    list="known-speakers"
-                    value={segment.speaker}
-                    onChange={(e) => onSpeakerChange(segment.id, e.target.value)}
-                    onBlur={onSegmentBlur}
-                    className={`text-xs font-bold tracking-wider uppercase bg-transparent border-none p-0 focus:ring-0 cursor-pointer hover:opacity-80 w-full transition-colors ${speakerColor}`}
-                    placeholder="Nombre del hablante"
-                  />
-                </div>
-                
+            <div key={segment.id} id={`segment-${originalIndex}`} className={`group relative p-4 rounded-lg transition-all duration-300 border-l-4 ${isActive ? 'bg-indigo-50 border-indigo-500 shadow-sm' : 'bg-white border-transparent hover:bg-gray-50'}`}>
+              <div className="flex items-center justify-between mb-2 gap-4">
+                <input
+                  type="text" list="known-speakers" value={segment.speaker}
+                  onChange={(e) => onSpeakerChange(segment.id, e.target.value)}
+                  className={`text-xs font-bold tracking-wider uppercase bg-transparent border-none p-0 focus:ring-0 cursor-pointer w-full ${speakerColor}`}
+                />
                 <div className="flex items-center gap-2">
-                  {/* Action Buttons - Visible on Hover or Active */}
-                  <div className={`flex items-center gap-1 transition-opacity duration-200 ${isActive ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}>
-                    {/* Correction Button */}
-                    <button
-                      onClick={() => onCorrectSegment(segment.id)}
-                      disabled={isCorrecting}
-                      className={`p-1 rounded transition-colors ${isCorrecting ? 'text-indigo-400' : 'text-gray-400 hover:text-indigo-600 hover:bg-indigo-50'}`}
-                      title={language === 'eu' ? "Zuzendu (Xuxen/AI)" : "Corregir ortografía"}
-                    >
-                      {isCorrecting ? (
-                        <div className="animate-spin h-4 w-4 border-2 border-indigo-500 border-t-transparent rounded-full" />
-                      ) : (
-                        <SpellcheckIcon />
-                      )}
-                    </button>
-
-                    {index > 0 && (
-                      <button
-                        onClick={() => onMergeSegment(segment.id)}
-                        className="p-1 text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 rounded transition-colors"
-                        title="Fusionar con el anterior"
-                      >
-                        <MergeUpIcon />
-                      </button>
-                    )}
-                    <button
-                      onClick={() => onDeleteSegment(segment.id)}
-                      className="p-1 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded transition-colors"
-                      title="Eliminar segmento"
-                    >
-                      <TrashIcon />
-                    </button>
+                  <div className={`flex items-center gap-1 transition-opacity ${isActive ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}>
+                    <button onClick={() => onCorrectSegment(segment.id)} disabled={isCorrecting} className="p-1 rounded text-gray-400 hover:text-indigo-600"><SpellcheckIcon /></button>
+                    <button onClick={() => onMergeSegment(segment.id)} className="p-1 text-gray-400 hover:text-indigo-600"><MergeUpIcon /></button>
+                    <button onClick={() => onDeleteSegment(segment.id)} className="p-1 text-gray-400 hover:text-red-600"><TrashIcon /></button>
                   </div>
-
-                  <button 
-                    onClick={() => onSegmentClick(segment.startTime)}
-                    className="shrink-0 text-xs font-mono text-gray-400 hover:text-indigo-600 transition-colors cursor-pointer bg-gray-100 px-2 py-1 rounded select-none"
-                  >
-                    {segment.startTime}
-                  </button>
+                  <button onClick={() => onSegmentClick(segment.startTime)} className="text-xs font-mono text-gray-400 bg-gray-100 px-2 py-1 rounded">{segment.startTime}</button>
                 </div>
               </div>
-              
               <textarea
-                className={`w-full resize-none bg-transparent border-none focus:ring-0 p-0 font-serif text-lg leading-relaxed outline-none transition-colors ${isActive ? 'text-gray-900' : 'text-gray-700'} ${isCorrecting ? 'opacity-50 blur-[1px]' : ''}`}
+                className={`w-full resize-none bg-transparent border-none focus:ring-0 p-0 font-serif text-lg leading-relaxed outline-none transition-colors ${isActive ? 'text-gray-900' : 'text-gray-700'}`}
                 rows={Math.ceil(segment.text.length / 60) || 1}
                 value={segment.text}
                 onChange={(e) => onSegmentChange(segment.id, e.target.value)}
-                onKeyDown={(e) => handleKeyDown(e, segment.id, index)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Backspace' && e.currentTarget.selectionStart === 0) onMergeSegment(segment.id);
+                  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); onSplitSegment(segment.id, e.currentTarget.selectionStart); }
+                }}
                 onFocus={() => onSegmentClick(segment.startTime)}
-                onBlur={onSegmentBlur}
                 readOnly={isCorrecting}
-                style={{ minHeight: '1.5em' }}
-                lang={language}
-                spellCheck={true}
               />
             </div>
           );
