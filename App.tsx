@@ -25,36 +25,6 @@ const App: React.FC = () => {
   const [history, setHistory] = useState<HistoryState[]>([]);
   const [historyIndex, setHistoryIndex] = useState(-1);
   const [isReviewing, setIsReviewing] = useState(false);
-  const [needsApiKey, setNeedsApiKey] = useState(false);
-
-  useEffect(() => {
-    const checkKey = async () => {
-      if (typeof window !== 'undefined' && (window as any).aistudio) {
-        const hasKey = await (window as any).aistudio.hasSelectedApiKey();
-        if (!hasKey && !process.env.API_KEY) {
-          setNeedsApiKey(true);
-        }
-      }
-    };
-    checkKey();
-  }, []);
-
-  const handleOpenKeySelector = async () => {
-    if ((window as any).aistudio) {
-      await (window as any).aistudio.openSelectKey();
-      setNeedsApiKey(false);
-      // Tras seleccionar, procedemos a recargar o reintentar si fuera necesario
-    }
-  };
-
-  const handleError = (error: any) => {
-    if (error.message === 'API_KEY_MISSING' || error.message === 'API_KEY_INVALID') {
-      setNeedsApiKey(true);
-      setProcessingState({ status: 'error', message: "Se requiere configurar una API Key válida." });
-    } else {
-      setProcessingState({ status: 'error', message: error.message });
-    }
-  };
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
@@ -71,7 +41,7 @@ const App: React.FC = () => {
         setProcessingState({ status: 'completed' });
         saveCurrentSession();
       } catch (error: any) {
-        handleError(error);
+        setProcessingState({ status: 'error', message: error.message });
       }
     }
   };
@@ -90,7 +60,7 @@ const App: React.FC = () => {
       a.download = name;
       a.click();
     } catch (error) {
-      handleError(error);
+      setProcessingState({ status: 'error', message: "Error en la revisión final." });
     } finally {
       setIsReviewing(false);
       setProcessingState({ status: 'completed' });
@@ -108,34 +78,16 @@ const App: React.FC = () => {
     a.click();
   };
 
-  if (needsApiKey) {
-    return (
-      <div className="flex flex-col items-center justify-center min-h-screen bg-paper p-6 text-center">
-        <div className="max-w-md w-full bg-white p-10 rounded-2xl shadow-xl border border-indigo-100">
-          <div className="text-indigo-600 mb-6 flex justify-center"><SparklesIcon /></div>
-          <h1 className="text-2xl font-serif font-bold mb-4">Configuración Requerida</h1>
-          <p className="text-gray-600 mb-8">Para usar los modelos avanzados de HarryUP, necesitas conectar tu cuenta de Google Gemini API.</p>
-          <button onClick={handleOpenKeySelector} className="w-full bg-indigo-600 text-white py-4 rounded-xl font-bold hover:bg-indigo-700 transition-all shadow-lg active:scale-95 mb-4">
-            Conectar API Key
-          </button>
-          <a href="https://ai.google.dev/gemini-api/docs/billing" target="_blank" rel="noreferrer" className="text-xs text-indigo-500 hover:underline">
-            ¿Cómo obtener una clave? (Billing Doc)
-          </a>
-        </div>
-      </div>
-    );
-  }
-
   if (!sessionId && processingState.status === 'idle') {
     return (
       <div className="flex flex-col items-center justify-center min-h-screen bg-paper p-6">
-        <div className="max-w-md w-full bg-white p-10 rounded-2xl shadow-xl border border-gray-100 text-center">
+        <div className="max-w-md w-full bg-white p-10 rounded-2xl shadow-xl border border-gray-100 text-center animate-[fadeIn_0.5s_ease-out]">
           <div className="flex justify-center mb-6 text-indigo-600"><UploadIcon /></div>
           <h1 className="text-3xl font-serif font-bold mb-4">HarryUP</h1>
-          <p className="text-gray-500 mb-8">Audio y Vídeo hasta 50MB / 2h.</p>
+          <p className="text-gray-500 mb-8 leading-relaxed">Sube audios o vídeos MP3/MP4 (hasta 50MB) para una transcripción periodística de alta precisión.</p>
           <div className="flex justify-center gap-2 mb-8">
-            <button onClick={() => setLanguage('es')} className={`px-3 py-1 rounded ${language === 'es' ? 'bg-indigo-600 text-white' : 'bg-gray-100'}`}>ES</button>
-            <button onClick={() => setLanguage('eu')} className={`px-3 py-1 rounded ${language === 'eu' ? 'bg-indigo-600 text-white' : 'bg-gray-100'}`}>EU</button>
+            <button onClick={() => setLanguage('es')} className={`px-4 py-1.5 rounded-lg font-medium transition-all ${language === 'es' ? 'bg-indigo-600 text-white shadow-md' : 'bg-gray-100 text-gray-500 hover:bg-gray-200'}`}>ES</button>
+            <button onClick={() => setLanguage('eu')} className={`px-4 py-1.5 rounded-lg font-medium transition-all ${language === 'eu' ? 'bg-indigo-600 text-white shadow-md' : 'bg-gray-100 text-gray-500 hover:bg-gray-200'}`}>EU</button>
           </div>
           <label className="block w-full bg-indigo-600 text-white py-4 rounded-xl font-bold cursor-pointer hover:bg-indigo-700 transition-all shadow-lg active:scale-95">
             {language === 'es' ? 'Empezar ahora' : 'Hasi orain'}
@@ -195,7 +147,7 @@ const App: React.FC = () => {
              try {
                 const txt = await correctSegmentText(s.text, language);
                 updateSegment(id, txt);
-             } catch (err) { handleError(err); }
+             } catch (err) { console.error(err); }
              setCorrectingSegmentId(null);
           }}
           currentAudioTime={currentTime} language={language} correctingSegmentId={correctingSegmentId}
@@ -209,7 +161,7 @@ const App: React.FC = () => {
         <div className="animate-spin rounded-full h-12 w-12 border-4 border-indigo-600 border-t-transparent"></div>
         <p className="font-serif font-bold text-indigo-900">{processingState.message}</p>
       </div>}
-      {processingState.status === 'error' && !needsApiKey && (
+      {processingState.status === 'error' && (
         <div className="fixed top-20 right-6 bg-red-50 border border-red-200 p-4 rounded-xl shadow-lg flex items-center gap-3 animate-[slideIn_0.3s_ease-out]">
           <div className="text-red-500"><XMarkIcon /></div>
           <p className="text-sm text-red-700 font-medium">{processingState.message}</p>
