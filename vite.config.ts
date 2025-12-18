@@ -16,7 +16,6 @@ export default defineConfig({
     },
   },
   define: {
-    // Esto permite que process.env.API_KEY esté disponible en el navegador
     'process.env.API_KEY': JSON.stringify(process.env.API_KEY)
   }
 })

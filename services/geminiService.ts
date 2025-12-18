@@ -56,23 +56,19 @@ async function generateWithRetry(modelInstance: any, params: any, retries = 3): 
 
 export const transcribeAudio = async (file: File, language: Language): Promise<TranscriptSegment[]> => {
   if (file.size > 50 * 1024 * 1024) {
-    throw new Error(language === 'es' 
-      ? "El archivo supera los 50MB."
-      : "Fitxategiak 50MB gainditzen ditu."
-    );
+    throw new Error(language === 'es' ? "El archivo supera los 50MB." : "Fitxategiak 50MB gainditzen ditu.");
   }
 
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY as string });
+  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   const audioPart = await fileToGenerativePart(file);
-  const model = "gemini-3-flash-preview";
   
   const prompt = language === 'es'
-    ? "Realiza la transcripción completa de este archivo (audio o vídeo). Identifica a los diferentes hablantes y marca el tiempo de inicio (MM:SS). Devuelve un array JSON de objetos con speaker, startTime y text."
-    : "Egin fitxategi honen transkripzio osoa (audioa edo bideoa) euskaraz. Identifikatu hizlariak eta markatu hasiera-ordua (MM:SS). Itzuli JSON array bat speaker, startTime eta text objektuekin.";
+    ? "Realiza la transcripción completa de este archivo. Identifica hablantes y marca el tiempo (MM:SS). Devuelve un array JSON con speaker, startTime y text."
+    : "Egin fitxategi honen transkripzio osoa euskaraz. Identifikatu hizlariak eta markatu hasiera-ordua (MM:SS). Itzuli JSON array bat speaker, startTime eta text objektuekin.";
 
   try {
     const response = await generateWithRetry(ai.models, {
-      model: model,
+      model: "gemini-3-flash-preview",
       contents: { parts: [audioPart, { text: prompt }] },
       config: {
         responseMimeType: "application/json",
@@ -88,22 +84,20 @@ export const transcribeAudio = async (file: File, language: Language): Promise<T
     }));
   } catch (error: any) {
     console.error("Transcription error:", error);
-    throw new Error("Error en la transcripción. Por favor, verifica tu conexión o el archivo.");
+    throw new Error("Error en la transcripción. Verifica el archivo o la clave de API.");
   }
 };
 
 export const reviewTranscript = async (segments: TranscriptSegment[], language: Language): Promise<string> => {
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY as string });
-  const model = "gemini-3-pro-preview";
-
+  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   const transcriptText = segments.map(s => `[${s.startTime}] ${s.speaker}: ${s.text}`).join('\n');
   const prompt = language === 'es'
-    ? "Actúa como corrector editorial. Revisa buscando errores críticos. Devuelve el texto final corregido."
-    : "Zuzentzaile editorial gisa jokatu. Berrikusi akats kritikoak bilatuz. Itzuli testu zuzendua.";
+    ? "Corrige errores críticos en esta transcripción. Devuelve solo el texto corregido."
+    : "Zuzendu akats kritikoak transkripzio honetan. Itzuli testu zuzendua soilik.";
 
   try {
     const response = await ai.models.generateContent({
-      model: model,
+      model: "gemini-3-pro-preview",
       contents: { parts: [{ text: prompt }, { text: transcriptText }] }
     });
     return response.text || "";
@@ -113,13 +107,12 @@ export const reviewTranscript = async (segments: TranscriptSegment[], language: 
 };
 
 export const queryTranscript = async (segments: TranscriptSegment[], query: string, language: Language): Promise<string> => {
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY as string });
-  const model = "gemini-3-flash-preview";
+  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   const transcriptText = segments.map(s => `[${s.startTime}] ${s.speaker}: ${s.text}`).join('\n');
 
   try {
     const response = await ai.models.generateContent({
-      model: model,
+      model: "gemini-3-flash-preview",
       contents: { parts: [{ text: `CONTEXTO:\n${transcriptText}` }, { text: `PREGUNTA: ${query}` }] },
       config: { systemInstruction: language === 'es' ? "Eres un asistente experto." : "Laguntzaile aditua zara." }
     });
@@ -129,31 +122,12 @@ export const queryTranscript = async (segments: TranscriptSegment[], query: stri
   }
 };
 
-export const refineTranscript = async (segments: TranscriptSegment[], mode: EditMode, language: Language): Promise<TranscriptSegment[]> => {
-  if (mode === EditMode.RAW) return segments;
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY as string });
-  const model = "gemini-3-flash-preview"; 
-  const prompt = language === 'es'
-    ? (mode === EditMode.CLEANED ? "Limpia muletillas del JSON." : "Redacta en estilo periodístico el JSON.")
-    : (mode === EditMode.CLEANED ? "Garbitu betegarriak JSONetik." : "Idatzi estilo profesionalean JSONa.");
-
-  try {
-    const response = await ai.models.generateContent({
-      model: model,
-      contents: { parts: [{ text: prompt }, { text: JSON.stringify(segments) }] },
-      config: { responseMimeType: "application/json", responseSchema: transcriptSchema }
-    });
-    const data = JSON.parse(response.text || "[]");
-    return data.map((item: any, index: number) => ({ ...item, id: segments[index]?.id || `ref-${index}` }));
-  } catch (error) { return segments; }
-};
-
 export const correctSegmentText = async (text: string, language: Language): Promise<string> => {
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY as string });
+  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   try {
     const response = await ai.models.generateContent({
       model: "gemini-3-flash-preview",
-      contents: { parts: [{ text: (language === 'es' ? "Corrige: " : "Zuzendu: ") + text }] }
+      contents: { parts: [{ text: (language === 'es' ? "Corrige gramática: " : "Zuzendu gramatika: ") + text }] }
     });
     return response.text?.trim() || text;
   } catch { return text; }
